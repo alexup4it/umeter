@@ -50,12 +50,16 @@ int avoltage(struct avoltage *avlt)
 	xSemaphoreTake(avlt->mutex, portMAX_DELAY);
 
 	status = HAL_ADC_Start(avlt->adc);
-	if (status != HAL_OK)
+	if (status != HAL_OK) {
+		xSemaphoreGive(avlt->mutex);
 		return -1;
+	}
 
 	status = HAL_ADC_PollForConversion(avlt->adc, ADC_TIMEOUT);
-	if (status != HAL_OK)
+	if (status != HAL_OK) {
+		xSemaphoreGive(avlt->mutex);
 		return -1;
+	}
 
 	value = HAL_ADC_GetValue(avlt->adc);
 
