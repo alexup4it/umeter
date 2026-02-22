@@ -71,22 +71,19 @@ static void info_mem(void)
 	TaskHandle_t t_handle;
 	TaskStatus_t details;
 	char temp[16];
-	int idx = 0;
 
 	utoa(xPortGetMinimumEverFreeHeapSize(), temp, 10);
 	print_info_str(&logger, "HEAP", "~", temp);
 
-	while (t_names[idx])
+	for (int i = 0; t_names[i]; i++)
 	{
-		t_handle = xTaskGetHandle(t_names[idx]);
+		t_handle = xTaskGetHandle(t_names[i]);
 		if (!t_handle)
 			continue;
 
 		vTaskGetInfo(t_handle, &details, pdTRUE, eInvalid);
 		utoa(details.usStackHighWaterMark * sizeof(StackType_t), temp, 10);
-		print_info_str(&logger, "STACK", t_names[idx], temp);
-
-		idx++;
+		print_info_str(&logger, "STACK", t_names[i], temp);
 	}
 }
 
