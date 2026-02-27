@@ -229,7 +229,10 @@ void hz_callback(TimerHandle_t timer)
 	if (params.period_sen && (sync_sec % params.period_sen == 0))
 		bits |= SYNC_BIT_SENSORS;
 
-	if (params.period_app && (sync_sec % params.period_app == 0))
+	/* APP fires 10 seconds after the aligned boundary so that sensors
+	 * have time to read and write fresh data before app reads the queue */
+	if (params.period_app && sync_sec >= 10 &&
+			((sync_sec - 10) % params.period_app == 0))
 		bits |= SYNC_BIT_APP;
 
 	if (sync_sec % 5 == 0)
