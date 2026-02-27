@@ -14,6 +14,9 @@
 #include "params.h"
 #include "fws.h"
 
+#include "usb_device.h"
+#include "usbd_core.h"
+
 
 #ifdef LOGGER
 
@@ -94,12 +97,30 @@ static void task(void *argument)
 {
 	struct system *sys = argument;
 
+	extern USBD_HandleTypeDef hUsbDeviceFS;
+
+	/* Initialize USB */
+	MX_USB_DEVICE_Init();
+
+	/* Wait 1 second for USB host to enumerate */
+	osDelay(1000);
+
+	if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)
+	{
+		/* No USB host connected — disable USB and stop logging task */
+		USBD_Stop(&hUsbDeviceFS);
+		USBD_DeInit(&hUsbDeviceFS);
+		__HAL_RCC_USB_OTG_FS_CLK_DISABLE();
+		vTaskDelete(NULL);
+		return;
+	}
+
 	for (;;)
 	{
-		osDelay(20000); // TODO: delay after first print?
-
 		info_base(sys);
 		info_mem();
+
+        osDelay(20000);
 	}
 }
 

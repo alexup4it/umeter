@@ -855,13 +855,6 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_task_default */
 void task_default(void *argument)
 {
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN 5 */
-
-  /* todo: move USB init */
-
-  /* Infinite loop */
   for(;;)
   {
     HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
@@ -869,7 +862,6 @@ void task_default(void *argument)
     HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
     osDelay(5000);
   }
-  /* USER CODE END 5 */
 }
 
 /**
