@@ -55,7 +55,7 @@ static void set_angle_offset(params_t *params, int32_t angle)
 	memcpy(&uparams, params, sizeof(uparams));
 	uparams.offset_angle = angle;
 
-	/* todo: log offset angle value */
+	led_blink(10);
 
 	watchdog_reset();
 	vTaskSuspendAll();
@@ -119,7 +119,7 @@ static void task(void *argument)
 
 	for (;;)
 	{
-		led_blink_set(3);
+		led_blink(3);
 
 		// Update sensor readings
 		drdy = 0;

@@ -12,12 +12,13 @@ static const osThreadAttr_t attributes = {
   .priority = (osPriority_t) osPriorityLow,
 };
 
-static volatile uint8_t blink_count = 1;
+static volatile uint8_t pending;
 
-void led_blink_set(uint8_t count)
+void led_blink(uint8_t count)
 {
-	if (count > blink_count)
-		blink_count = count;
+	if (count > pending)
+		pending = count;
+	xTaskNotifyGive(handle);
 }
 
 static void task(void *argument)
@@ -25,10 +26,9 @@ static void task(void *argument)
 	uint8_t count;
 	for (;;)
 	{
-		xEventGroupWaitBits(sync_events, SYNC_BIT_BLINK,
-				pdTRUE, pdFALSE, portMAX_DELAY);
-		count = blink_count;
-		blink_count = 1;
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		count = pending;
+		pending = 0;
 		for (uint8_t i = 0; i < count; i++)
 		{
 			HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);

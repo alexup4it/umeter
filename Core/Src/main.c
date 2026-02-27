@@ -1183,7 +1183,7 @@ void task_default(void *argument)
       bits |= SYNC_BIT_APP;
 
     if (sync_sec % 5 == 0)
-      bits |= SYNC_BIT_BLINK;
+      led_blink(1);
 
     bits |= SYNC_BIT_WATCHDOG;
 

@@ -461,7 +461,7 @@ static void task(void *argument)
 		}
 		strjson_int(request, "tamper", READ_TAMPER);
 
-		led_blink_set(4);
+		led_blink(4);
 		while (proc_http_post(app, &post, "/api/data"))
 			xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
 					pdTRUE, pdFALSE, portMAX_DELAY);

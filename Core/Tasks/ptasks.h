@@ -93,12 +93,11 @@ struct watchdog;
 #define SYNC_BIT_ECOUNTER   (1 << 0)
 #define SYNC_BIT_SENSORS    (1 << 1)
 #define SYNC_BIT_APP        (1 << 2)
-#define SYNC_BIT_BLINK      (1 << 3)
-#define SYNC_BIT_WATCHDOG   (1 << 4)
+#define SYNC_BIT_WATCHDOG   (1 << 3)
 
 extern EventGroupHandle_t sync_events;
 
-void led_blink_set(uint8_t count);
+void led_blink(uint8_t count);
 
 void task_siface(struct siface *siface);
 void task_sim800l(struct sim800l *mod);
