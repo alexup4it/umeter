@@ -17,11 +17,9 @@
 #define CMD_BUFFER_SIZE 96
 
 /*
- * Minimum functionality mode
- * Without this feature power consumption will be about 1 mA, but module will be
- * always connected to cellular network. Use only if SIM800L is used rarely
+ * Hardware power management replaces AT sleep and RF disable.
+ * Modem is powered off completely when idle via MDM_EN/MDM_EN_PRE pins.
  */
-#define DISABLE_RF
 
 #include "logger.h"
 #ifdef LOGGER
@@ -80,12 +78,21 @@ inline static void reset_unset(struct sim800l *mod)
 
 /******************************************************************************/
 void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin, char *apn)
+		sim800l_hw_init hw_init,
+		GPIO_TypeDef *rst_port, uint16_t rst_pin,
+		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
+		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
+		char *apn)
 {
 	memset(mod, 0, sizeof(*mod));
 	mod->uart = uart;
+	mod->hw_init = hw_init;
 	mod->rst_port = rst_port;
 	mod->rst_pin = rst_pin;
+	mod->pwr_port = pwr_port;
+	mod->pwr_pin = pwr_pin;
+	mod->pwr_pre_port = pwr_pre_port;
+	mod->pwr_pre_pin = pwr_pre_pin;
 	mod->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
 	mod->queue = xQueueCreate(SIM800L_TASK_QUEUE_SIZE,
 			sizeof(struct sim800l_task));
@@ -93,7 +100,8 @@ void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
 	strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
 	mod->apn[sizeof(mod->apn) - 1] = '\0';
 
-	reset_unset(mod);
+	reset_set(mod); /* Hold in reset while powered off */
+	sim800l_power_off(mod);
 	task_done(mod);
 }
 
@@ -102,6 +110,38 @@ void sim800l_irq(struct sim800l *mod, const char *buf, size_t len)
 {
 	BaseType_t woken = pdFALSE;
 	xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
+}
+
+/******************************************************************************/
+void sim800l_power_on(struct sim800l *mod)
+{
+	/* Hold RST low during power-up */
+	reset_set(mod);
+
+	/* 2-stage power enable: pre-charge cap through 120 Ohm, then full */
+	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_SET);
+	osDelay(200); /* Charge 100uF through 120 Ohm (~60ms for 5*tau) */
+	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_SET);
+	osDelay(100);
+
+	/* Reinitialize UART + start DMA RX (pins back to AF mode) */
+	mod->hw_init();
+
+	/* Release RST - module starts booting */
+	reset_unset(mod);
+	osDelay(3000); /* Wait for SIM800L boot */
+}
+
+/******************************************************************************/
+void sim800l_power_off(struct sim800l *mod)
+{
+	reset_set(mod); /* Hold in reset */
+
+	/* Deinit UART to release pins (no parasitic power via TX/RX) */
+	HAL_UART_DeInit(mod->uart);
+
+	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_RESET);
 }
 
 inline static void clear_rx_buffer(struct sim800l *mod)
@@ -612,7 +652,11 @@ void sim800l_task(struct sim800l *mod)
 		switch ((enum state) mod->state)
 		{
 		case STATE_STARTUP:
-			state(mod, STATE_RESET, STATUS_OK);
+			sim800l_power_on(mod);
+
+			mod->errors = 0;
+			
+			state(mod, STATE_AT, STATUS_OK);
 			break;
 
 		case STATE_RESET:
@@ -620,6 +664,7 @@ void sim800l_task(struct sim800l *mod)
 			osDelay(200);
 			reset_unset(mod);
 			osDelay(3000);
+
 
 			state(mod, STATE_AT, STATUS_OK);
 			break;
@@ -686,53 +731,18 @@ void sim800l_task(struct sim800l *mod)
 				break;
 			}
 
-			// No new task: sleep and wait
-#ifdef DISABLE_RF
-			transmit(mod, "AT+CFUN=0");
-			if (!compare_buffer_beginning(mod,
-					"\r\n+CPIN: NOT READY\r\n\r\nOK\r\n", 10000))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-#endif /* DISABLE_RF */
-
-			transmit(mod, "AT+CSCLK=2");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-
+			// No new task: power off and wait
 #ifdef LOGGER
-			logger_add_str(&logger, TAG, false, "sleep...");
+			logger_add_str(&logger, TAG, false, "power off...");
 #endif
+			sim800l_power_off(mod);
 
 			// Wait for the task
 			xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
 			mod->task_ticks = xTaskGetTickCount();
 
-			transmit(mod, "AT");
-			osDelay(150);
-
-			transmit(mod, "AT+CSCLK=0");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-
-#ifdef DISABLE_RF
-			transmit(mod, "AT+CFUN=1");
-			if (!compare_buffer_beginning(mod,
-					"\r\n+CPIN: READY\r\n\r\nOK\r\n\r\nSMS Ready\r\n", 10000))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-#endif /* DISABLE_RF */
-
-			state(mod, STATE_DO_TASK, STATUS_OK);
+			// Power on and reinitialize
+			state(mod, STATE_STARTUP, STATUS_OK);
 			break;
 
 		case STATE_DO_TASK:

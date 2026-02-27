@@ -46,6 +46,12 @@ void counter_power_off(struct counter *cnt)
 }
 
 /******************************************************************************/
+void counter_reset(struct counter *cnt)
+{
+	cnt->count = 0;
+}
+
+/******************************************************************************/
 uint32_t counter(struct counter *cnt)
 {
 	return cnt->count;

@@ -41,6 +41,7 @@ void counter_init(struct counter *cnt, GPIO_TypeDef *pwr_port,
 void counter_irq(struct counter *cnt);
 void counter_power_on(struct counter *cnt);
 void counter_power_off(struct counter *cnt);
+void counter_reset(struct counter *cnt);
 uint32_t counter(struct counter *cnt);
 void counter_accum_update(struct counter *cnt, uint32_t value);
 void counter_accum_read(struct counter *cnt, struct counter_accum *out);

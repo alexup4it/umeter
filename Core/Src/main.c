@@ -221,6 +221,12 @@ void btn_callback(void)
 	task_sensors_notify(&sens);
 }
 
+void sim800l_hw_init_cb(void)
+{
+	MX_USART2_UART_Init();
+	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
+}
+
 //
 static void stack_color(void)
 {
@@ -308,10 +314,7 @@ int main(void)
   params_init();
   params_get(&params);
 
-  /* todo */
-  // SIM800L power
-  HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(MDM_EN_GPIO_Port, MDM_EN_Pin, GPIO_PIN_SET);
+  /* SIM800L power is managed by sim800l module (2-stage: EN_PRE -> EN) */
 
   //
   memset(&actual, 0, sizeof(actual));
@@ -331,7 +334,11 @@ int main(void)
   logger_init(&logger, &siface);
 #endif
   w25q_s_init(&mem, &hspi2, SPI2_CS_GPIO_Port, SPI2_CS_Pin);
-  sim800l_init(&mod, &huart2, MDM_RST_GPIO_Port, MDM_RST_Pin, params.apn);
+  sim800l_init(&mod, &huart2, sim800l_hw_init_cb,
+		  MDM_RST_GPIO_Port, MDM_RST_Pin,
+		  MDM_EN_GPIO_Port, MDM_EN_Pin,
+		  MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin,
+		  params.apn);
   ota_init(&ota, &mod, &mem, params.secret, params.url_ota);
   as5600_init(&pot, &hi2c1, MX_I2C1_Init, SENS_EN_GPIO_Port,
 		  SENS_EN_Pin /* 0x6C */);
@@ -381,7 +388,7 @@ int main(void)
   //
   /* todo: replace with USB */
   //HAL_UARTEx_ReceiveToIdle_DMA(&huart1, ub_sif, UART_BUFFER_SIZE);
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
+  /* UART2 DMA RX is now started inside sim800l_power_on via hw_init callback */
 
   /* USER CODE END 2 */
 
