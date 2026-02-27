@@ -28,6 +28,7 @@
 typedef uint64_t timeout_t;
 
 typedef void (*sim800l_cb)(int, void *);
+typedef void (*sim800l_hw_init)(void);
 
 /*
  * @brief: SIM800L task structure
@@ -48,8 +49,14 @@ struct sim800l_task
 struct sim800l
 {
 	UART_HandleTypeDef *uart;
+	sim800l_hw_init hw_init;
 	GPIO_TypeDef *rst_port;
 	uint16_t rst_pin;
+
+	GPIO_TypeDef *pwr_port;
+	uint16_t pwr_pin;
+	GPIO_TypeDef *pwr_pre_port;
+	uint16_t pwr_pre_pin;
 
 	StreamBufferHandle_t stream;
 	xQueueHandle queue;
@@ -120,12 +127,21 @@ struct sim800l_netscan
  * @brief: struct sim800l handle initialization
  * @param mod: struct sim800l handle
  * @param uart: UART_HandleTypeDef handle that is used for interaction
+ * @param hw_init: UART hardware init callback (reinitializes UART + starts DMA RX)
  * @param rst_port: GPIO RESET port
  * @param rst_pin: GPIO RESET pin
+ * @param pwr_port: GPIO power enable port (MDM_EN)
+ * @param pwr_pin: GPIO power enable pin (MDM_EN)
+ * @param pwr_pre_port: GPIO pre-charge power enable port (MDM_EN_PRE)
+ * @param pwr_pre_pin: GPIO pre-charge power enable pin (MDM_EN_PRE)
  * @param apn: APN string
  */
 void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin, char *apn);
+		sim800l_hw_init hw_init,
+		GPIO_TypeDef *rst_port, uint16_t rst_pin,
+		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
+		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
+		char *apn);
 
 /*
  * @brief: Copy data from UART interrupt handler
@@ -140,6 +156,18 @@ void sim800l_irq(struct sim800l *mod, const char *buf, size_t len);
  * @param mod: struct sim800l handle
  */
 void sim800l_task(struct sim800l *mod);
+
+/*
+ * @brief: Power on SIM800L (2-stage: EN_PRE then EN)
+ * @param mod: struct sim800l handle
+ */
+void sim800l_power_on(struct sim800l *mod);
+
+/*
+ * @brief: Power off SIM800L
+ * @param mod: struct sim800l handle
+ */
+void sim800l_power_off(struct sim800l *mod);
 
 /*
  * @brief: Lock SIM800L in sleep state

@@ -26,11 +26,13 @@
 
 #include <string.h>
 
+#include "task.h"
 #include "timers.h"
 
 #include "appiface.h"
 #include "avoltage.h"
 #include "sim800l.h"
+#include "watchdog.h"
 #include "ptasks.h"
 #include "button.h"
 #include "siface.h"
@@ -59,6 +61,11 @@
 	SIM800L_UART_BUFFER_SIZE : SIFACE_UART_BUFFER_SIZE)
 
 #define STACK_COLOR_WORD 0xACACACAC
+
+/* RTC wakeup timer uses LSI/2 = ~16 kHz clock */
+#define RTC_WKUP_CLK_HZ          16000U
+/* Maximum sleep time limited by external WDG (1.6 s) */
+#define MAX_SLEEP_MS             1000U
 
 /* USER CODE END PD */
 
@@ -103,7 +110,9 @@ uint8_t ub_sif[UART_BUFFER_SIZE];
 params_t params;
 struct button btn;
 struct siface siface;
+#ifdef LOGGER
 struct logger logger;
+#endif
 struct w25q_s mem;
 struct sim800l mod;
 struct ota ota;
@@ -119,6 +128,7 @@ struct ecounter ecnt;
 struct app app;
 struct system sys;
 
+EventGroupHandle_t sync_events;
 volatile int init_done = 0;
 
 extern const uint32_t *_ebss;
@@ -207,7 +217,27 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void hz_callback(TimerHandle_t timer)
 {
+	static uint32_t sync_sec = 0;
+	EventBits_t bits = 0;
+
 	atomic_inc(&timestamp);
+	sync_sec++;
+
+	if (params.mtime_count && (sync_sec % params.mtime_count == 0))
+		bits |= SYNC_BIT_ECOUNTER;
+
+	if (params.period_sen && (sync_sec % params.period_sen == 0))
+		bits |= SYNC_BIT_SENSORS;
+
+	if (params.period_app && (sync_sec % params.period_app == 0))
+		bits |= SYNC_BIT_APP;
+
+	if (sync_sec % 5 == 0)
+		bits |= SYNC_BIT_BLINK;
+
+	bits |= SYNC_BIT_WATCHDOG;
+
+	xEventGroupSetBits(sync_events, bits);
 }
 
 void btn_callback(void)
@@ -216,6 +246,326 @@ void btn_callback(void)
 		return;
 
 	task_sensors_notify(&sens);
+}
+
+void sim800l_hw_init_cb(void)
+{
+	MX_USART2_UART_Init();
+	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
+}
+
+/*---------------------------------------------------------------------------*/
+/* RTC wakeup timer — direct register access (no HAL RTC driver needed)      */
+/*---------------------------------------------------------------------------*/
+
+static inline void rtc_unlock(void)
+{
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
+}
+
+static inline void rtc_lock(void)
+{
+	RTC->WPR = 0xFF;
+}
+
+static void rtc_wakeup_init(void)
+{
+	/* Enable PWR clock and backup domain access */
+	__HAL_RCC_PWR_CLK_ENABLE();
+	PWR->CR |= PWR_CR_DBP;
+
+	/* Select LSI as RTC clock source and enable RTC */
+	if ((RCC->BDCR & RCC_BDCR_RTCSEL) != RCC_BDCR_RTCSEL_1)
+	{
+		/* Reset backup domain to change RTC source */
+		RCC->BDCR |= RCC_BDCR_BDRST;
+		RCC->BDCR &= ~RCC_BDCR_BDRST;
+		/* LSI selected (RTCSEL = 10) */
+		RCC->BDCR |= RCC_BDCR_RTCSEL_1;
+	}
+	RCC->BDCR |= RCC_BDCR_RTCEN;
+
+	/* Unlock RTC registers */
+	rtc_unlock();
+
+	/* Enter init mode */
+	RTC->ISR |= RTC_ISR_INIT;
+	while (!(RTC->ISR & RTC_ISR_INITF))
+		;
+
+	/* Set prescalers: AsynchPrediv=127, SynchPrediv=249 (irrelevant for wakeup,
+	 * but needed for valid init) */
+	RTC->PRER = (127U << 16) | 249U;
+
+	/* Exit init mode */
+	RTC->ISR &= ~RTC_ISR_INIT;
+
+	/* Disable wakeup timer to configure it */
+	RTC->CR &= ~RTC_CR_WUTE;
+	while (!(RTC->ISR & RTC_ISR_WUTWF))
+		;
+
+	/* Select clock: RTCCLK/2 (LSI/2 ≈ 16 kHz) → WUCKSEL = 011 */
+	RTC->CR = (RTC->CR & ~RTC_CR_WUCKSEL) | RTC_CR_WUCKSEL_0 | RTC_CR_WUCKSEL_1;
+
+	/* Enable wakeup interrupt */
+	RTC->CR |= RTC_CR_WUTIE;
+
+	/* Clear wakeup flag */
+	RTC->ISR &= ~RTC_ISR_WUTF;
+
+	rtc_lock();
+
+	/* Configure EXTI line 22 (RTC wakeup) — rising edge, interrupt mode */
+	EXTI->IMR |= EXTI_IMR_MR22;
+	EXTI->RTSR |= EXTI_RTSR_TR22;
+	EXTI->PR = EXTI_PR_PR22; /* Clear pending */
+
+	/* Enable RTC_WKUP IRQ in NVIC */
+	HAL_NVIC_SetPriority(RTC_WKUP_IRQn, 15, 0);
+	HAL_NVIC_EnableIRQ(RTC_WKUP_IRQn);
+}
+
+static void rtc_wakeup_set(uint32_t ticks_ms)
+{
+	uint32_t wut;
+
+	if (ticks_ms > MAX_SLEEP_MS)
+		ticks_ms = MAX_SLEEP_MS;
+
+	/* Calculate wakeup timer value: WUT = (ms * RTC_WKUP_CLK_HZ) / 1000 - 1 */
+	wut = (ticks_ms * RTC_WKUP_CLK_HZ) / 1000U;
+	if (wut > 0)
+		wut--;
+	if (wut > 0xFFFF)
+		wut = 0xFFFF;
+
+	rtc_unlock();
+
+	/* Disable wakeup timer */
+	RTC->CR &= ~RTC_CR_WUTE;
+	while (!(RTC->ISR & RTC_ISR_WUTWF))
+		;
+
+	/* Set wakeup auto-reload value */
+	RTC->WUTR = wut;
+
+	/* Clear wakeup flag and EXTI pending */
+	RTC->ISR &= ~RTC_ISR_WUTF;
+	EXTI->PR = EXTI_PR_PR22;
+
+	/* Enable wakeup timer */
+	RTC->CR |= RTC_CR_WUTE;
+
+	rtc_lock();
+}
+
+static void rtc_wakeup_stop(void)
+{
+	rtc_unlock();
+	RTC->CR &= ~RTC_CR_WUTE;
+	RTC->ISR &= ~RTC_ISR_WUTF;
+	rtc_lock();
+	EXTI->PR = EXTI_PR_PR22;
+}
+
+void RTC_WKUP_IRQHandler(void)
+{
+	if (RTC->ISR & RTC_ISR_WUTF)
+	{
+		rtc_unlock();
+		RTC->ISR &= ~RTC_ISR_WUTF;
+		rtc_lock();
+	}
+	EXTI->PR = EXTI_PR_PR22;
+}
+
+/*---------------------------------------------------------------------------*/
+/* Low-power GPIO helpers for Stop mode                                      */
+/*---------------------------------------------------------------------------*/
+
+/*
+ * Before entering Stop mode, reconfigure all floating / AF pins to analog
+ * to eliminate leakage through external pull-ups, flash bus, etc.
+ * Analog mode gives the lowest possible GPIO current (no input Schmitt
+ * trigger, no pull, no AF driver).
+ *
+ * Pins that MUST keep their state (output-driven power-enable, CS, etc.)
+ * are left untouched.
+ */
+static void gpio_enter_stop(void)
+{
+	GPIO_InitTypeDef g = {0};
+	g.Mode  = GPIO_MODE_ANALOG;
+	g.Pull  = GPIO_NOPULL;
+	g.Speed = GPIO_SPEED_FREQ_LOW;
+
+	/* --- W25Q flash: deep power-down BEFORE disabling SPI2 ---
+	 * Reduces flash standby from ~25 µA to ~1 µA.
+	 * SPI2 must still be functional at this point. */
+	w25q_hw_deinit(&mem.mem);
+
+	/* --- SPI2 bus (PB13-SCK, PB14-MISO, PB15-MOSI) ---
+	 * Left in AF_PP after MX_SPI2_Init → leaks into W25Q flash.
+	 * CS (PB12) stays high (output) to keep flash deselected. */
+	g.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- I2C1 (PB6-SCL, PB7-SDA) ---
+	 * DeInit leaves them floating; external pull-ups → ~0.7 mA each. */
+	g.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- I2C2 (PB10-SCL, PB3-SDA) ---
+	 * Same pull-up issue. */
+	g.Pin = GPIO_PIN_3 | GPIO_PIN_10;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- USART2 (PA2-TX, PA3-RX) --- already DeInit when modem off,
+	 * but HAL_GPIO_DeInit only resets to input-float → set analog. */
+	g.Pin = GPIO_PIN_2 | GPIO_PIN_3;
+	HAL_GPIO_Init(GPIOA, &g);
+
+	/* --- EXTI0 Hall sensor input (PA0) --- already masked in EXTI,
+	 * but the pin itself as input-float picks up noise → analog. */
+	g.Pin = GPIO_PIN_0;
+	HAL_GPIO_Init(GPIOA, &g);
+
+	/* --- ADC1: disable peripheral to cut analog bias current --- */
+	__HAL_RCC_ADC1_CLK_DISABLE();
+
+	/* --- Disable DMA1 clock (no active transfers during Stop) --- */
+	__HAL_RCC_DMA1_CLK_DISABLE();
+
+	/* --- Disable SPI2 clock --- */
+	__HAL_RCC_SPI2_CLK_DISABLE();
+
+	/* --- Disable GPIOH clock (only HSE pins, unused in Stop) --- */
+	__HAL_RCC_GPIOH_CLK_DISABLE();
+}
+
+/*
+ * After waking from Stop, restore peripheral pins and clocks.
+ * SystemClock_Config() has already been called at this point.
+ */
+static void gpio_exit_stop(void)
+{
+	GPIO_InitTypeDef g = {0};
+
+	/* Re-enable port clocks that were disabled */
+	__HAL_RCC_GPIOH_CLK_ENABLE();
+	__HAL_RCC_DMA1_CLK_ENABLE();
+	__HAL_RCC_SPI2_CLK_ENABLE();
+	__HAL_RCC_ADC1_CLK_ENABLE();
+
+	/* --- Restore SPI2 pins to AF5 --- */
+	g.Pin       = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+	g.Mode      = GPIO_MODE_AF_PP;
+	g.Pull      = GPIO_NOPULL;
+	g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+	g.Alternate = GPIO_AF5_SPI2;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- W25Q flash: release deep power-down AFTER SPI2 is restored --- */
+	w25q_hw_init(&mem.mem);
+
+	/* --- Restore EXTI0 (Hall sensor) as falling-edge interrupt --- */
+	g.Pin  = GPIO_PIN_0;
+	g.Mode = GPIO_MODE_IT_FALLING;
+	g.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &g);
+
+	/* I2C1/I2C2 and USART2 pins are restored lazily by their hw_init
+	 * callbacks (as5600, aht20, sim800l) when the peripheral is
+	 * actually needed — no need to restore here. */
+}
+
+/*---------------------------------------------------------------------------*/
+/* Custom tickless idle: RTC wakeup + Stop mode                              */
+/*---------------------------------------------------------------------------*/
+
+void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime)
+{
+	uint32_t sleep_ms;
+
+	/* Cap at MAX_SLEEP_MS for external WDG safety */
+	if (xExpectedIdleTime > pdMS_TO_TICKS(MAX_SLEEP_MS))
+		xExpectedIdleTime = pdMS_TO_TICKS(MAX_SLEEP_MS);
+
+	sleep_ms = xExpectedIdleTime * (1000U / configTICK_RATE_HZ);
+
+	/* Enter critical section (disable interrupts) */
+	__asm volatile("cpsid i" ::: "memory");
+	__asm volatile("dsb");
+	__asm volatile("isb");
+
+	/* Confirm sleep is still valid */
+	if (eTaskConfirmSleepModeStatus() == eAbortSleep)
+	{
+		__asm volatile("cpsie i" ::: "memory");
+		return;
+	}
+
+	/* Stop mode is unsafe when:
+	 *  - USB OTG FS is active (clocks stop → host sees disconnect)
+	 *  - SIM800L modem is on (UART DMA resumes at wrong baud on HSI wakeup)
+	 * Fallback to regular Sleep (WFI) — SysTick keeps running.
+	 */
+	if ((RCC->AHB2ENR & RCC_AHB2ENR_OTGFSEN) ||
+		HAL_GPIO_ReadPin(MDM_EN_GPIO_Port, MDM_EN_Pin) == GPIO_PIN_SET)
+	{
+		__asm volatile("cpsie i" ::: "memory");
+		__WFI();
+		return;
+	}
+
+	/* Refresh watchdog before entering Stop mode */
+	watchdog_reset();
+
+	/* Suspend HAL tick (TIM1) */
+	HAL_SuspendTick();
+
+	/* Mask EXTI0 (Hall sensor) — PA0 floats when sensor is off,
+	 * noise generates spurious falling edges that wake MCU instantly */
+	EXTI->IMR &= ~EXTI_IMR_MR0;
+
+	/* Reconfigure GPIO/peripherals for minimal leakage */
+	gpio_enter_stop();
+
+	/* Set RTC wakeup timer */
+	rtc_wakeup_set(sleep_ms);
+
+	/* --- Enter Stop mode (low-power regulator) --- */
+	HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+
+	/* --- Woken up (interrupts still disabled) --- */
+
+	/* Check if RTC wakeup timer fired (full sleep) before clearing */
+	uint32_t wutf = RTC->ISR & RTC_ISR_WUTF;
+
+	/* Stop the RTC wakeup timer */
+	rtc_wakeup_stop();
+
+	/* Restore system clock (HSE + PLL) after Stop mode */
+	SystemClock_Config();
+
+	/* Restore GPIO/peripherals after wakeup */
+	gpio_exit_stop();
+
+	/* Resume HAL tick */
+	HAL_ResumeTick();
+
+	/* Restore EXTI0 (Hall sensor interrupt) */
+	EXTI->IMR |= EXTI_IMR_MR0;
+
+	/* Re-enable interrupts */
+	__asm volatile("cpsie i" ::: "memory");
+
+	/* Advance the RTOS tick count:
+	 * If RTC WUTF fired — full sleep elapsed.
+	 * If woken by something else — conservative 1 tick. */
+	vTaskStepTick(wutf ? xExpectedIdleTime : 1);
 }
 
 //
@@ -305,10 +655,7 @@ int main(void)
   params_init();
   params_get(&params);
 
-  /* todo */
-  // SIM800L power
-  HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(MDM_EN_GPIO_Port, MDM_EN_Pin, GPIO_PIN_SET);
+  /* SIM800L power is managed by sim800l module (2-stage: EN_PRE -> EN) */
 
   //
   memset(&actual, 0, sizeof(actual));
@@ -324,28 +671,34 @@ int main(void)
   //
   button_init(&btn, BTN_MB_GPIO_Port, BTN_MB_Pin, btn_callback);
   siface_init(&siface, 32, appiface, &appif);
+#ifdef LOGGER
   logger_init(&logger, &siface);
+#endif
   w25q_s_init(&mem, &hspi2, SPI2_CS_GPIO_Port, SPI2_CS_Pin);
-  sim800l_init(&mod, &huart2, MDM_RST_GPIO_Port, MDM_RST_Pin, params.apn);
+  sim800l_init(&mod, &huart2, sim800l_hw_init_cb,
+		  MDM_RST_GPIO_Port, MDM_RST_Pin,
+		  MDM_EN_GPIO_Port, MDM_EN_Pin,
+		  MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin,
+		  params.apn);
   ota_init(&ota, &mod, &mem, params.secret, params.url_ota);
   as5600_init(&pot, &hi2c1, MX_I2C1_Init, SENS_EN_GPIO_Port,
 		  SENS_EN_Pin /* 0x6C */);
   aht20_init(&aht, &hi2c2, MX_I2C2_Init, AHT20_EN_GPIO_Port,
 		  AHT20_EN_Pin /* 0x70 */);
   counter_init(&cnt, HALL_EN_GPIO_Port, HALL_EN_Pin);
-  avoltage_init(&avlt, &hadc1, 2);
+  avoltage_init(&avlt, &hadc1, 2, VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin);
 
   //
   mqueue_init(&mem);
 
   // sens
   memset(&sens, 0, sizeof(sens));
-  sens.qtmp = mqueue_create(SENSORS_QUEUE_SECNUM);
-  sens.qhum = mqueue_create(SENSORS_QUEUE_SECNUM);
-  sens.qang = mqueue_create(SENSORS_QUEUE_SECNUM);
+  sens.queue = mqueue_create(SENSORS_QUEUE_SECNUM,
+		  sizeof(struct sensor_record));
   sens.avlt = &avlt;
   sens.pot = &pot;
   sens.aht = &aht;
+  sens.cnt = &cnt;
   sens.timestamp = &timestamp;
   sens.params = &params;
   sens.actual = &actual;
@@ -353,11 +706,7 @@ int main(void)
 
   // ecnt
   memset(&ecnt, 0, sizeof(ecnt));
-  ecnt.qec_avg = mqueue_create(SENSORS_QUEUE_SECNUM);
-  ecnt.qec_max = mqueue_create(SENSORS_QUEUE_SECNUM);
-  ecnt.qec_min = mqueue_create(SENSORS_QUEUE_SECNUM);
   ecnt.cnt = &cnt;
-  ecnt.timestamp = &timestamp;
   ecnt.params = &params;
   ecnt.actual = &actual;
 
@@ -366,22 +715,27 @@ int main(void)
   app.timestamp = &timestamp;
   app.params = &params;
   app.sens = &sens;
-  app.ecnt = &ecnt;
   app.mod = &mod;
   app.bl = &bl;
 
   // sys
   memset(&sys, 0, sizeof(sys));
-  sys.ext_pin = EXT_WDG_Pin;
-  sys.ext_port = EXT_WDG_GPIO_Port;
-  sys.wdg = &hiwdg;
   sys.params = &params;
   sys.bl = &bl;
+
+  // wd
+  watchdog_init(&hiwdg, EXT_WDG_GPIO_Port, EXT_WDG_Pin);
+
+  // RTC wakeup timer for Stop mode
+  rtc_wakeup_init();
+
+  // Flash power-down in Stop mode
+  PWR->CR |= PWR_CR_FPDS;
 
   //
   /* todo: replace with USB */
   //HAL_UARTEx_ReceiveToIdle_DMA(&huart1, ub_sif, UART_BUFFER_SIZE);
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
+  /* UART2 DMA RX is now started inside sim800l_power_on via hw_init callback */
 
   /* USER CODE END 2 */
 
@@ -398,6 +752,8 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
+
+  sync_events = xEventGroupCreate();
 
   hz_timer_handle = xTimerCreateStatic("hz", pdMS_TO_TICKS(1000), pdTRUE,
 		  (void *) 0, hz_callback, &hz_timer_buf);
@@ -416,7 +772,8 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
 
-  task_system(&sys);
+  task_watchdog();
+	task_logging(&sys);
   task_siface(&siface);
   task_sensors(&sens);
   task_ecounter(&ecnt);
@@ -759,10 +1116,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
+  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
                           |MDM_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
@@ -787,17 +1144,23 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin EXT_WDG_Pin */
-  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin;
+  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin */
+  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin SPI2_CS_Pin MDM_EN_PRE_Pin
-                           LED_MB_Pin MDM_RST_Pin */
-  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|SPI2_CS_Pin|MDM_EN_PRE_Pin
-                          |LED_MB_Pin|MDM_RST_Pin;
+  /*Configure GPIO pin : EXT_WDG_Pin (Hi-Z, no pull) */
+  GPIO_InitStruct.Pin = EXT_WDG_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin VBAT_MEAS_EN_Pin SPI2_CS_Pin
+                           MDM_EN_PRE_Pin LED_MB_Pin MDM_RST_Pin */
+  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|SPI2_CS_Pin
+                          |MDM_EN_PRE_Pin|LED_MB_Pin|MDM_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -824,19 +1187,14 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_task_default */
 void task_default(void *argument)
 {
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN 5 */
-
-  /* todo: move USB init */
-
-  /* Infinite loop */
   for(;;)
   {
-    HAL_GPIO_TogglePin(LED_DB_GPIO_Port, LED_DB_Pin);
-    osDelay(200);
+    xEventGroupWaitBits(sync_events, SYNC_BIT_BLINK,
+            pdTRUE, pdFALSE, portMAX_DELAY);
+    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
+    osDelay(10);
+    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
   }
-  /* USER CODE END 5 */
 }
 
 /**

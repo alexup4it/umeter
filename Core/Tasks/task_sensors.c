@@ -1,8 +1,5 @@
 /*
  * Sensors task
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2025
  */
 
 #include "ptasks.h"
@@ -13,10 +10,13 @@
 #include "atomic.h"
 #include "as5600.h"
 #include "aht20.h"
+#include "watchdog.h"
 
 #include "logger.h"
+#ifdef LOGGER
 #define TAG "SENSORS"
 extern struct logger logger;
+#endif
 
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
@@ -57,17 +57,17 @@ static void set_angle_offset(params_t *params, int32_t angle)
 
 	/* todo: log offset angle value */
 
-	osDelay(500);
+	watchdog_reset();
 	vTaskSuspendAll();
 	params_set(&uparams);
+	xTaskResumeAll();
 
-	NVIC_SystemReset(); // --> RESET
+	params->offset_angle = angle;
 }
 
 static void task(void *argument)
 {
 	struct sensors *sens = argument;
-	struct item item;
 	int avail = 0; // Sensor is available (bit mask)
 	int drdy; // Sensor data was successfully read (bit mask)
 	int ret;
@@ -106,6 +106,7 @@ static void task(void *argument)
 	sens->actual->avail = avail;
 	xSemaphoreGive(sens->actual->mutex);
 
+	#ifdef LOGGER
 	tmp = pvPortMalloc(sizeof(avail) * 8 + 2); // + "b\0"
 	if (tmp)
 	{
@@ -114,6 +115,7 @@ static void task(void *argument)
 		logger_add_str(&logger, TAG, false, tmp);
 		vPortFree(tmp);
 	}
+	#endif
 
 	for (;;)
 	{
@@ -160,24 +162,28 @@ static void task(void *argument)
 			sens->actual->angle = angle_wo;
 		xSemaphoreGive(sens->actual->mutex);
 
-		// Add sensor readings to queues
-		if (drdy & DRDY_TMP)
+		// Build combined sensor record
 		{
-			item.value = temperature;
-			item.timestamp = ts;
-			mqueue_set(sens->qtmp, &item);
-		}
-		if (drdy & DRDY_HUM)
-		{
-			item.value = humidity;
-			item.timestamp = ts;
-			mqueue_set(sens->qhum, &item);
-		}
-		if (drdy & DRDY_ANG)
-		{
-			item.value = angle_wo;
-			item.timestamp = ts;
-			mqueue_set(sens->qang, &item);
+			struct sensor_record rec;
+			struct counter_accum ca;
+
+			memset(&rec, 0, sizeof(rec));
+			rec.timestamp = ts;
+			if (drdy & DRDY_VOL)
+				rec.voltage = voltage;
+			if (drdy & DRDY_TMP)
+				rec.temperature = temperature;
+			if (drdy & DRDY_HUM)
+				rec.humidity = humidity;
+			if (drdy & DRDY_ANG)
+				rec.angle = angle_wo;
+
+			counter_accum_read(sens->cnt, &ca);
+			rec.count_avg = ca.avg;
+			rec.count_min = ca.min;
+			rec.count_max = ca.max;
+
+			mqueue_set(sens->queue, &rec);
 		}
 
 		if (sens->events)
@@ -189,8 +195,8 @@ static void task(void *argument)
 		}
 
 //		vTaskDelayUntil(&wake, pdMS_TO_TICKS(sens->params->period_sen * 1000));
-		ulTaskNotifyTake(pdTRUE,
-				pdMS_TO_TICKS(sens->params->period_sen * 1000));
+		xEventGroupWaitBits(sync_events, SYNC_BIT_SENSORS,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 	}
 }
 
@@ -203,8 +209,6 @@ void task_sensors(struct sensors *sens)
 /******************************************************************************/
 void task_sensors_notify(struct sensors *sens)
 {
-	BaseType_t woken = pdFALSE;
-
 	atomic_inc(&sens->events);
-	vTaskNotifyGiveFromISR(handle, &woken);
+	xEventGroupSetBits(sync_events, SYNC_BIT_SENSORS);
 }

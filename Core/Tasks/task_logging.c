@@ -1,5 +1,5 @@
 /*
- * System task
+ * Logging task
  *
  * Dmitry Proshutinsky <dproshutinsky@gmail.com>
  * 2024-2026
@@ -10,16 +10,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "logger.h"
 #include "params.h"
 #include "fws.h"
 
-#include "logger.h"
+#include "usb_device.h"
+#include "usbd_core.h"
+
+
+#ifdef LOGGER
+
 #define TAG "SYSTEM"
 extern struct logger logger;
 
 static osThreadId_t handle;
 static const osThreadAttr_t attributes = {
-  .name = "system",
+  .name = "logging",
   .stack_size = 120 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
@@ -66,60 +72,64 @@ static void info_base(struct system *sys)
 
 static void info_mem(void)
 {
-	const char *t_names[] = {"def", "system", "app", "siface", "ota", "sim800l",
-			"sensors", "ecounter", "button", NULL};
+	const char *t_names[] = {"def", "logging", "app", "siface", "ota",
+			"sim800l", "sensors", "ecounter", "button", "watchdog", NULL};
 	TaskHandle_t t_handle;
 	TaskStatus_t details;
 	char temp[16];
-	int idx = 0;
 
 	utoa(xPortGetMinimumEverFreeHeapSize(), temp, 10);
 	print_info_str(&logger, "HEAP", "~", temp);
 
-	while (t_names[idx])
+	for (int i = 0; t_names[i]; i++)
 	{
-		t_handle = xTaskGetHandle(t_names[idx]);
+		t_handle = xTaskGetHandle(t_names[i]);
 		if (!t_handle)
 			continue;
 
 		vTaskGetInfo(t_handle, &details, pdTRUE, eInvalid);
 		utoa(details.usStackHighWaterMark * sizeof(StackType_t), temp, 10);
-		print_info_str(&logger, "STACK", t_names[idx], temp);
-
-		idx++;
+		print_info_str(&logger, "STACK", t_names[i], temp);
 	}
 }
 
 static void task(void *argument)
 {
-	TickType_t ticks = xTaskGetTickCount();
 	struct system *sys = argument;
 
-	/* todo: fix me */
-//	info_base(sys);
+	extern USBD_HandleTypeDef hUsbDeviceFS;
+
+	/* Initialize USB */
+	MX_USB_DEVICE_Init();
+
+	/* Wait 1 second for USB host to enumerate */
+	osDelay(1000);
+
+	if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED)
+	{
+		/* No USB host connected — disable USB and stop logging task */
+		USBD_Stop(&hUsbDeviceFS);
+		USBD_DeInit(&hUsbDeviceFS);
+		__HAL_RCC_USB_OTG_FS_CLK_DISABLE();
+		vTaskDelete(NULL);
+		return;
+	}
 
 	for (;;)
 	{
-		if ((xTaskGetTickCount() - ticks) >= pdMS_TO_TICKS(20000))
-		{
-			ticks = xTaskGetTickCount();
-			info_base(sys);
-			info_mem();
-		}
+		info_base(sys);
+		info_mem();
 
-		// 32kHz / 128 / 4095 -> 16,38 seconds
-		HAL_IWDG_Refresh(sys->wdg);
-
-		// External watchdog (CBM706TAS8, ADM708TARZ) -> 1,6 seconds
-		HAL_GPIO_TogglePin(sys->ext_port, sys->ext_pin);
-
-		osDelay(1000);
+        osDelay(20000);
 	}
 }
 
-/******************************************************************************/
-void task_system(struct system *sys)
-{
-	handle = osThreadNew(task, sys, &attributes);
-}
+#endif /* LOGGER */
 
+/******************************************************************************/
+void task_logging(struct system *sys)
+{
+#ifdef LOGGER
+	handle = osThreadNew(task, sys, &attributes);
+#endif
+}

@@ -83,6 +83,8 @@ void usb_cdc_tx_callback(void);
 #define MDM_EN_GPIO_Port GPIOA
 #define EXT_WDG_Pin GPIO_PIN_15
 #define EXT_WDG_GPIO_Port GPIOA
+#define VBAT_MEAS_EN_Pin GPIO_PIN_5
+#define VBAT_MEAS_EN_GPIO_Port GPIOB
 #define MDM_EN_PRE_Pin GPIO_PIN_4
 #define MDM_EN_PRE_GPIO_Port GPIOB
 #define LED_MB_Pin GPIO_PIN_8

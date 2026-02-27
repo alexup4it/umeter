@@ -17,15 +17,15 @@
 #define CMD_BUFFER_SIZE 96
 
 /*
- * Minimum functionality mode
- * Without this feature power consumption will be about 1 mA, but module will be
- * always connected to cellular network. Use only if SIM800L is used rarely
+ * Hardware power management replaces AT sleep and RF disable.
+ * Modem is powered off completely when idle via MDM_EN/MDM_EN_PRE pins.
  */
-#define DISABLE_RF
 
 #include "logger.h"
+#ifdef LOGGER
 #define TAG "SIM800L"
 extern struct logger logger;
+#endif
 
 enum status
 {
@@ -36,13 +36,10 @@ enum status
 enum state
 {
 	STATE_STARTUP,
-	STATE_RESET,
 	STATE_AT,
-	STATE_FLUSH,
 	STATE_ECHO_OFF,
 	STATE_DEL_SMS,
 	STATE_IDLE,
-	STATE_DO_TASK,
 	STATE_CBC,
 	STATE_CREG,
 	STATE_GPRS_INIT,
@@ -78,12 +75,21 @@ inline static void reset_unset(struct sim800l *mod)
 
 /******************************************************************************/
 void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin, char *apn)
+		sim800l_hw_init hw_init,
+		GPIO_TypeDef *rst_port, uint16_t rst_pin,
+		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
+		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
+		char *apn)
 {
 	memset(mod, 0, sizeof(*mod));
 	mod->uart = uart;
+	mod->hw_init = hw_init;
 	mod->rst_port = rst_port;
 	mod->rst_pin = rst_pin;
+	mod->pwr_port = pwr_port;
+	mod->pwr_pin = pwr_pin;
+	mod->pwr_pre_port = pwr_pre_port;
+	mod->pwr_pre_pin = pwr_pre_pin;
 	mod->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
 	mod->queue = xQueueCreate(SIM800L_TASK_QUEUE_SIZE,
 			sizeof(struct sim800l_task));
@@ -91,7 +97,8 @@ void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
 	strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
 	mod->apn[sizeof(mod->apn) - 1] = '\0';
 
-	reset_unset(mod);
+	reset_set(mod); /* Hold in reset while powered off */
+	sim800l_power_off(mod);
 	task_done(mod);
 }
 
@@ -100,6 +107,38 @@ void sim800l_irq(struct sim800l *mod, const char *buf, size_t len)
 {
 	BaseType_t woken = pdFALSE;
 	xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
+}
+
+/******************************************************************************/
+void sim800l_power_on(struct sim800l *mod)
+{
+	/* Hold RST low during power-up */
+	reset_set(mod);
+
+	/* 2-stage power enable: pre-charge cap through 120 Ohm, then full */
+	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_SET);
+	osDelay(200); /* Charge 100uF through 120 Ohm (~60ms for 5*tau) */
+	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_SET);
+	osDelay(100);
+
+	/* Reinitialize UART + start DMA RX (pins back to AF mode) */
+	mod->hw_init();
+
+	/* Release RST - module starts booting */
+	reset_unset(mod);
+	osDelay(3000); /* Wait for SIM800L boot */
+}
+
+/******************************************************************************/
+void sim800l_power_off(struct sim800l *mod)
+{
+	reset_set(mod); /* Hold in reset */
+
+	/* Deinit UART to release pins (no parasitic power via TX/RX) */
+	HAL_UART_DeInit(mod->uart);
+
+	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_RESET);
 }
 
 inline static void clear_rx_buffer(struct sim800l *mod)
@@ -122,55 +161,110 @@ static bool wait_for_any(struct sim800l *mod, timeout_t timeout)
 	if (!received)
 		return false;
 
+#ifdef LOGGER
 	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+#endif
 
 	return true;
 }
 
 /**
- * @note: timeout should be more then 0
+ * Wait until the specified substring appears in the receive buffer.
+ * Does NOT clear the buffer — caller or next transmit handles that.
+ * @return true if substring found within timeout, false on timeout
  */
-static bool wait_for_num(struct sim800l *mod, size_t num, timeout_t timeout)
-{
-	TickType_t ticks = xTaskGetTickCount();
-	TickType_t left = pdMS_TO_TICKS(timeout);
-	TickType_t wait;
-
-	if (num > SIM800L_BUFFER_SIZE)
-		return false;
-
-	while ((mod->rxlen < num) && left)
-	{
-		mod->rxlen += xStreamBufferReceive(mod->stream, &mod->rxb[mod->rxlen],
-				num - mod->rxlen, left);
-
-		wait = xTaskGetTickCount() - ticks;
-		if (left > wait)
-			left -= wait;
-		else
-			left = 0;
-	}
-
-	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
-
-	if (mod->rxlen < num)
-		return false;
-
-	return true;
-}
-
-static bool compare_buffer_beginning(struct sim800l *mod, const char *sample,
+static bool wait_for(struct sim800l *mod, const char *substr,
 		timeout_t timeout)
 {
-	size_t len = strlen(sample);
+	TickType_t start = xTaskGetTickCount();
+	TickType_t limit = pdMS_TO_TICKS(timeout);
+	TickType_t elapsed;
+	TickType_t left;
 
-	if (!wait_for_num(mod, len, timeout))
-		return false;
+	for (;;)
+	{
+		mod->rxb[mod->rxlen] = '\0';
+		if (strstr((char *) mod->rxb, substr))
+		{
+#ifdef LOGGER
+			logger_add(&logger, TAG, false, (char *) mod->rxb,
+					mod->rxlen);
+#endif
+			return true;
+		}
 
-	if (strncmp((char *) mod->rxb, sample, len) != 0)
-		return false;
+		elapsed = xTaskGetTickCount() - start;
+		if (elapsed >= limit)
+			break;
+		left = limit - elapsed;
 
-	return true;
+		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
+			break;
+
+		mod->rxlen += xStreamBufferReceive(mod->stream,
+				&mod->rxb[mod->rxlen],
+				SIM800L_BUFFER_SIZE - mod->rxlen, left);
+	}
+
+#ifdef LOGGER
+	if (mod->rxlen)
+		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+#endif
+	return false;
+}
+
+/**
+ * Wait for OK or ERROR response (whichever comes first).
+ * Does NOT clear the buffer.
+ * @return true if OK received, false if ERROR or timeout
+ */
+static bool wait_for_ok(struct sim800l *mod, timeout_t timeout)
+{
+	TickType_t start = xTaskGetTickCount();
+	TickType_t limit = pdMS_TO_TICKS(timeout);
+	TickType_t elapsed;
+	TickType_t left;
+
+	for (;;)
+	{
+		mod->rxb[mod->rxlen] = '\0';
+
+		if (strstr((char *) mod->rxb, "OK"))
+		{
+#ifdef LOGGER
+			logger_add(&logger, TAG, false, (char *) mod->rxb,
+					mod->rxlen);
+#endif
+			return true;
+		}
+
+		if (strstr((char *) mod->rxb, "ERROR"))
+		{
+#ifdef LOGGER
+			logger_add(&logger, TAG, false, (char *) mod->rxb,
+					mod->rxlen);
+#endif
+			return false;
+		}
+
+		elapsed = xTaskGetTickCount() - start;
+		if (elapsed >= limit)
+			break;
+		left = limit - elapsed;
+
+		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
+			break;
+
+		mod->rxlen += xStreamBufferReceive(mod->stream,
+				&mod->rxb[mod->rxlen],
+				SIM800L_BUFFER_SIZE - mod->rxlen, left);
+	}
+
+#ifdef LOGGER
+	if (mod->rxlen)
+		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+#endif
+	return false;
 }
 
 static void transmit_data(struct sim800l *mod, const uint8_t *buf, size_t len)
@@ -181,17 +275,32 @@ static void transmit_data(struct sim800l *mod, const uint8_t *buf, size_t len)
 	memcpy(mod->txb, buf, len);
 
 	mod->txb[len] = '\r';
-	len++;
+	mod->txb[len + 1] = '\n';
+	len += 2;
 
+	osDelay(20);
+
+#ifdef LOGGER
 	logger_add(&logger, TAG, false, (char *) mod->txb, len);
+#endif
 
-	clear_rx_buffer(mod); // ?
+	clear_rx_buffer(mod);
 	while (HAL_UART_Transmit_DMA(mod->uart, mod->txb, len) == HAL_BUSY);
 }
 
 inline static void transmit(struct sim800l *mod, const char *buf)
 {
 	transmit_data(mod, (const uint8_t *) buf, strlen(buf));
+}
+
+/**
+ * Send AT command and wait for OK or ERROR.
+ * @return true if OK, false if ERROR or timeout
+ */
+static bool send_cmd(struct sim800l *mod, const char *cmd, timeout_t timeout)
+{
+	transmit(mod, cmd);
+	return wait_for_ok(mod, timeout);
 }
 
 static void state(struct sim800l *mod, enum state new_state, enum status status)
@@ -225,7 +334,7 @@ static void state(struct sim800l *mod, enum state new_state, enum status status)
 static bool parse_battery_charge(struct sim800l *mod, timeout_t timeout)
 {
 	const char *header = "+CBC:";
-	const char *ending = "\r\nOK\r\n";
+	const char *ending = "OK";
 	char *p, *end;
 
 	while (wait_for_any(mod, timeout))
@@ -446,11 +555,11 @@ static int parse_http_status(struct sim800l *mod, timeout_t timeout)
 
 		p = strstr(p, ",");
 		if (!p)
-			return false;
+			return -1;
 
 		p++;
 		if (!*p)
-			return false;
+			return -1;
 
 		status = strtoul(p, NULL, 0);
 
@@ -604,15 +713,8 @@ void sim800l_task(struct sim800l *mod)
 		switch ((enum state) mod->state)
 		{
 		case STATE_STARTUP:
-			state(mod, STATE_RESET, STATUS_OK);
-			break;
-
-		case STATE_RESET:
-			reset_set(mod);
-			osDelay(200);
-			reset_unset(mod);
-			osDelay(3000);
-
+			sim800l_power_on(mod);
+			mod->errors = 0;
 			state(mod, STATE_AT, STATUS_OK);
 			break;
 
@@ -623,126 +725,67 @@ void sim800l_task(struct sim800l *mod)
 			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(2000))
 			{
 				transmit(mod, "AT");
-				if (compare_buffer_beginning(mod, "AT\r\r\nOK\r\n", 500))
+				if (wait_for(mod, "OK", 500))
 				{
-					state(mod, STATE_FLUSH, STATUS_OK);
+					if (strstr((char *) mod->rxb, "AT"))
+						state(mod, STATE_ECHO_OFF, STATUS_OK);
+					else
+						state(mod, STATE_DEL_SMS, STATUS_OK);
 					done = true;
-					break; /* while */
+					break;
 				}
 			}
 			if (!done)
 				state(mod, STATE_STARTUP, STATUS_ERROR);
 			break;
 
-		case STATE_FLUSH:
-			// TODO: Wait for something?
-			// "AT\r\r\nOK\r\n\r\nRDY\r\n\r\n+CFUN: 1\r\n\r\n+CPIN: READY\r\n"
-			wait_for_num(mod, SIM800L_BUFFER_SIZE, 3000);
-			state(mod, STATE_ECHO_OFF, STATUS_OK);
-			break;
-
 		case STATE_ECHO_OFF:
-			transmit(mod, "ATE0");
-			if (compare_buffer_beginning(mod, "ATE0\r\r\nOK\r\n", 500))
-				state(mod, STATE_DEL_SMS, STATUS_OK);
-			else
+			if (!send_cmd(mod, "ATE0", 500) ||
+					!send_cmd(mod, "AT&W", 500))
+			{
 				state(mod, STATE_STARTUP, STATUS_ERROR);
+				break;
+			}
+			state(mod, STATE_DEL_SMS, STATUS_OK);
 			break;
 
 		case STATE_DEL_SMS:
-			// TODO: ?
-			transmit(mod, "AT+CMGDA=6");
-			if (compare_buffer_beginning(mod, "\r\nOK\r\n", 5000))
-				state(mod, STATE_IDLE, STATUS_OK);
-			else if (compare_buffer_beginning(mod, "\r\nERROR\r\n", 1))
-				state(mod, STATE_IDLE, STATUS_OK);
-			else
-				state(mod, STATE_STARTUP, STATUS_ERROR);
+			send_cmd(mod, "AT+CMGDA=6", 5000);
+			state(mod, STATE_IDLE, STATUS_OK);
 			break;
 
 		case STATE_IDLE:
-			// Previous task: try again
-			if (mod->task.issue != ISSUE_IDLE)
+			if (mod->task.issue == ISSUE_IDLE)
 			{
-				state(mod, STATE_DO_TASK, STATUS_OK);
-				break;
+				if (uxQueueMessagesWaiting(mod->queue))
+				{
+					xQueueReceive(mod->queue, &mod->task, 0);
+					mod->task_ticks = xTaskGetTickCount();
+				}
+				else
+				{
+#ifdef LOGGER
+					logger_add_str(&logger, TAG, false, "power off...");
+#endif
+					sim800l_power_off(mod);
+					xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
+					mod->task_ticks = xTaskGetTickCount();
+					state(mod, STATE_STARTUP, STATUS_OK);
+					break;
+				}
 			}
 
-			// New task
-			if (uxQueueMessagesWaiting(mod->queue))
-			{
-				xQueueReceive(mod->queue, &mod->task, 0);
-				mod->task_ticks = xTaskGetTickCount();
-
-				state(mod, STATE_DO_TASK, STATUS_OK);
-				break;
-			}
-
-			// No new task: sleep and wait
-#ifdef DISABLE_RF
-			transmit(mod, "AT+CFUN=0");
-			if (!compare_buffer_beginning(mod,
-					"\r\n+CPIN: NOT READY\r\n\r\nOK\r\n", 10000))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-#endif /* DISABLE_RF */
-
-			transmit(mod, "AT+CSCLK=2");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-
-			logger_add_str(&logger, TAG, false, "sleep...");
-
-			// Wait for the task
-			xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
-			mod->task_ticks = xTaskGetTickCount();
-
-			transmit(mod, "AT");
-			osDelay(150);
-
-			transmit(mod, "AT+CSCLK=0");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-
-#ifdef DISABLE_RF
-			transmit(mod, "AT+CFUN=1");
-			if (!compare_buffer_beginning(mod,
-					"\r\n+CPIN: READY\r\n\r\nOK\r\n\r\nSMS Ready\r\n", 10000))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-#endif /* DISABLE_RF */
-
-			state(mod, STATE_DO_TASK, STATUS_OK);
-			break;
-
-		case STATE_DO_TASK:
 			switch ((enum issue) mod->task.issue)
 			{
-			case ISSUE_IDLE:
-				// Never be here
-				osDelay(1);
-				break;
-
 			case ISSUE_VOLTAGE:
 				state(mod, STATE_CBC, STATUS_OK);
 				break;
-
 			case ISSUE_HTTP:
-				state(mod, STATE_CREG, STATUS_OK);
-				break;
-
 			case ISSUE_NETSCAN:
 				state(mod, STATE_CREG, STATUS_OK);
+				break;
+			default:
+				osDelay(1);
 				break;
 			}
 			break;
@@ -769,11 +812,10 @@ void sim800l_task(struct sim800l *mod)
 			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(30000))
 			{
 				transmit(mod, "AT+CREG?");
-				if (compare_buffer_beginning(mod,
-						"\r\n+CREG: 0,1\r\n\r\nOK\r\n", 5000))
+				if (wait_for(mod, "+CREG: 0,1", 5000))
 				{
 					done = true;
-					break; /* while */
+					break;
 				}
 				osDelay(1000);
 			}
@@ -785,13 +827,12 @@ void sim800l_task(struct sim800l *mod)
 
 			if (mod->task.issue == ISSUE_NETSCAN)
 				state(mod, STATE_NETSCAN, STATUS_OK);
-			else /* ISSUE_HTTP */
+			else
 				state(mod, STATE_GPRS_INIT, STATUS_OK);
 			break;
 
 		case STATE_GPRS_INIT:
-			transmit(mod, "AT+SAPBR=3,1,CONTYPE,GPRS");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
+			if (!send_cmd(mod, "AT+SAPBR=3,1,CONTYPE,GPRS", 500))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
@@ -799,24 +840,20 @@ void sim800l_task(struct sim800l *mod)
 
 			strcpy(cmd, "AT+SAPBR=3,1,APN,");
 			strcat(cmd, mod->apn);
-			transmit(mod, cmd);
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
+			if (!send_cmd(mod, cmd, 500))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
 			}
 
-			transmit(mod, "AT+SAPBR=1,1");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 20000))
+			if (!send_cmd(mod, "AT+SAPBR=1,1", 20000))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
 			}
 
-			// TODO: Copy IP
-			// "\r\n+SAPBR: 1,1,\"10.68.222.113\"\r\n\r\nOK\r\n"
 			transmit(mod, "AT+SAPBR=2,1");
-			if (!compare_buffer_beginning(mod, "\r\n+SAPBR: 1,1", 20000))
+			if (!wait_for(mod, "+SAPBR: 1,1", 20000))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
@@ -826,15 +863,8 @@ void sim800l_task(struct sim800l *mod)
 			break;
 
 		case STATE_GPRS_HTTP:
-			transmit(mod, "AT+HTTPINIT");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 2000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			transmit(mod, "AT+HTTPPARA=CID,1");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 2000))
+			if (!send_cmd(mod, "AT+HTTPINIT", 2000) ||
+					!send_cmd(mod, "AT+HTTPPARA=CID,1", 2000))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
@@ -842,8 +872,7 @@ void sim800l_task(struct sim800l *mod)
 
 			strcpy(cmd, "AT+HTTPPARA=URL,");
 			strcat(cmd, get_http_url(mod));
-			transmit(mod, cmd);
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 2000))
+			if (!send_cmd(mod, cmd, 2000))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
@@ -852,24 +881,21 @@ void sim800l_task(struct sim800l *mod)
 			// SSL does not work
 			// \r\nOK\r\n\r\n+HTTPACTION: 0,606,0\r\n
 
-			// Request "Authorization" header
 			if (get_http_req_auth(mod))
 			{
 				strcpy(cmd, "AT+HTTPPARA=USERDATA,Authorization: ");
 				strcat(cmd, get_http_req_auth(mod));
-				transmit(mod, cmd);
-				if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 2000))
+				if (!send_cmd(mod, cmd, 2000))
 				{
 					state(mod, STATE_IDLE, STATUS_ERROR);
 					break;
 				}
 			}
 
-			// HTTP POST
 			if (get_http_method(mod))
 			{
-				transmit(mod, "AT+HTTPPARA=CONTENT,application/json");
-				if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
+				if (!send_cmd(mod,
+						"AT+HTTPPARA=CONTENT,application/json", 500))
 				{
 					state(mod, STATE_IDLE, STATUS_ERROR);
 					break;
@@ -879,14 +905,13 @@ void sim800l_task(struct sim800l *mod)
 				utoa(get_http_request_len(mod), &cmd[strlen(cmd)], 10);
 				strcat(cmd, ",1000");
 				transmit(mod, cmd);
-				if (!compare_buffer_beginning(mod, "\r\nDOWNLOAD\r\n", 1000))
+				if (!wait_for(mod, "DOWNLOAD", 1000))
 				{
 					state(mod, STATE_IDLE, STATUS_ERROR);
 					break;
 				}
 
-				transmit(mod, get_http_request(mod));
-				if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
+				if (!send_cmd(mod, get_http_request(mod), 500))
 				{
 					state(mod, STATE_IDLE, STATUS_ERROR);
 					break;
@@ -894,10 +919,7 @@ void sim800l_task(struct sim800l *mod)
 			}
 
 			strcpy(cmd, "AT+HTTPACTION=");
-			if (!get_http_method(mod))
-				strcat(cmd, "0"); /* GET */
-			else
-				strcat(cmd, "1"); /* POST */
+			strcat(cmd, get_http_method(mod) ? "1" : "0");
 			transmit(mod, cmd);
 			if (parse_http_action(mod, NULL, 30000) != 200)
 			{
@@ -905,7 +927,6 @@ void sim800l_task(struct sim800l *mod)
 				break;
 			}
 
-			// Response "Authorization" header
 			if (get_http_res_auth_get(mod))
 			{
 				transmit(mod, "AT+HTTPHEAD");
@@ -923,7 +944,6 @@ void sim800l_task(struct sim800l *mod)
 			break;
 
 		case STATE_GPRS_HTTP_TERM:
-			// TODO: Check in while loop with timeout
 			transmit(mod, "AT+HTTPSTATUS?");
 			if (parse_http_status(mod, 500))
 			{
@@ -931,18 +951,15 @@ void sim800l_task(struct sim800l *mod)
 				break;
 			}
 
-			transmit(mod, "AT+HTTPTERM");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 2000))
+			if (!send_cmd(mod, "AT+HTTPTERM", 2000))
 			{
 				state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
 				break;
 			}
 
-			// Get the next task now
-			// Continue to send HTTP while connected to the Internet
+			// Continue to send HTTP while connected
 			if (mod->task.issue == ISSUE_IDLE)
 			{
-				// 50ms for tasks to create a new HTTP request
 				if (xQueueReceive(mod->queue, &mod->task, pdMS_TO_TICKS(50)))
 				{
 					mod->task_ticks = xTaskGetTickCount();
@@ -958,23 +975,21 @@ void sim800l_task(struct sim800l *mod)
 			break;
 
 		case STATE_GPRS_DEINIT:
-			transmit(mod, "AT+SAPBR=0,1");
-			if (compare_buffer_beginning(mod, "\r\nOK\r\n", 10000))
+			if (send_cmd(mod, "AT+SAPBR=0,1", 10000))
 				state(mod, STATE_IDLE, STATUS_OK);
 			else
 				state(mod, STATE_IDLE, STATUS_ERROR);
 			break;
 
 		case STATE_NETSCAN:
-			transmit(mod, "AT+CNETSCAN=1");
-			if (!compare_buffer_beginning(mod, "\r\nOK\r\n", 500))
+			if (!send_cmd(mod, "AT+CNETSCAN=1", 500))
 			{
 				state(mod, STATE_IDLE, STATUS_ERROR);
 				break;
 			}
 
 			transmit(mod, "AT+CNETSCAN");
-			if(!parse_net_scan(mod, 45000)) // Callbacks inside
+			if (!parse_net_scan(mod, 45000))
 			{
 				task_done(mod);
 				state(mod, STATE_IDLE, STATUS_OK);

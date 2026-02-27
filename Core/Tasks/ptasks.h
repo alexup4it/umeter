@@ -1,8 +1,5 @@
 /*
  * Application tasks
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2025
  */
 
 #ifndef UMETER_TASKS_H_
@@ -10,6 +7,7 @@
 
 #include "cmsis_os.h"
 #include "semphr.h"
+#include "event_groups.h"
 
 #include "avoltage.h"
 #include "counter.h"
@@ -20,7 +18,19 @@
 #include "mqueue.h"
 #include "ota.h"
 
-#define SENSORS_QUEUE_SECNUM 16
+#define SENSORS_QUEUE_SECNUM 48
+
+struct sensor_record
+{
+	uint32_t timestamp;
+	int32_t voltage;
+	int32_t temperature;
+	int32_t humidity;
+	int32_t angle;
+	uint32_t count_avg;
+	uint32_t count_min;
+	uint32_t count_max;
+};
 
 struct actual
 {
@@ -37,13 +47,12 @@ struct actual
 
 struct sensors
 {
-	mqueue_t *qtmp;
-	mqueue_t *qhum;
-	mqueue_t *qang;
+	mqueue_t *queue;
 
 	struct avoltage *avlt;
 	struct as5600 *pot;
 	struct aht20 *aht;
+	struct counter *cnt;
 	volatile uint32_t *timestamp;
 	params_t *params;
 
@@ -53,12 +62,7 @@ struct sensors
 
 struct ecounter
 {
-	mqueue_t *qec_avg;
-	mqueue_t *qec_max;
-	mqueue_t *qec_min;
-
 	struct counter *cnt;
-	volatile uint32_t *timestamp;
 	params_t *params;
 
 	struct actual *actual;
@@ -68,7 +72,6 @@ struct app
 {
 	struct sim800l *mod;
 	struct sensors *sens;
-	struct ecounter *ecnt;
 
 	volatile uint32_t *timestamp;
 	volatile struct bl_params *bl;
@@ -77,10 +80,6 @@ struct app
 
 struct system
 {
-	IWDG_HandleTypeDef *wdg;
-	GPIO_TypeDef *ext_port;
-	uint16_t ext_pin;
-
 	volatile struct bl_params *bl;
 	params_t *params;
 
@@ -88,11 +87,23 @@ struct system
 };
 
 
+struct watchdog;
+
+/* Sync event group bits — set by hz_callback, waited on by tasks */
+#define SYNC_BIT_ECOUNTER   (1 << 0)
+#define SYNC_BIT_SENSORS    (1 << 1)
+#define SYNC_BIT_APP        (1 << 2)
+#define SYNC_BIT_BLINK      (1 << 3)
+#define SYNC_BIT_WATCHDOG   (1 << 4)
+
+extern EventGroupHandle_t sync_events;
+
 void task_siface(struct siface *siface);
 void task_sim800l(struct sim800l *mod);
 void task_ota(struct ota *ota);
 void task_app(struct app *app);
-void task_system(struct system *sys);
+void task_watchdog();
+void task_logging(struct system *sys);
 void task_button(struct button *btn);
 void task_sensors(struct sensors *sens);
 void task_ecounter(struct ecounter *ecnt);

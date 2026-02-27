@@ -2,15 +2,19 @@
  * Extended counter task
  *
  * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025
+ * 2025-2026
  */
 
 #include "ptasks.h"
 
-#include <stdlib.h>
-#include <string.h>
+/* Measurement window duration (ms) */
+#define COUNTER_MEAS_TIME_MS 3000
 
-#define COUNT_MIN_INIT 0xFFFFFFFF
+/* Stabilization time after power on (ms) */
+#define COUNTER_STABILIZE_MS 10
+
+/* Polling interval while waiting for pulses (ms) */
+#define COUNTER_POLL_MS 50
 
 static osThreadId_t handle;
 static const osThreadAttr_t attributes = {
@@ -23,76 +27,56 @@ static const osThreadAttr_t attributes = {
 static void task(void *argument)
 {
 	struct ecounter *ecnt = argument;
-	struct item item;
-
-	uint32_t count = 0;
-	size_t sumcnt = 0;
-	uint32_t min = COUNT_MIN_INIT;
-	uint32_t max = 0;
-	uint32_t sum = 0;
 	uint32_t value;
-	uint32_t ts;
-
-	TickType_t wake = xTaskGetTickCount();
-	TickType_t psen = xTaskGetTickCount();
-
-	counter_power_on(ecnt->cnt);
-	osDelay(10);
-
-	count = counter(ecnt->cnt);
+	uint32_t elapsed;
 
 	for (;;)
 	{
-		vTaskDelayUntil(&wake, pdMS_TO_TICKS(ecnt->params->mtime_count * 1000));
+		/* Wait for sync signal from hz_timer */
+		xEventGroupWaitBits(sync_events, SYNC_BIT_ECOUNTER,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 
-		value = counter(ecnt->cnt) - count;
-		count = counter(ecnt->cnt);
+		/* Power on and stabilize */
+		counter_power_on(ecnt->cnt);
+		osDelay(COUNTER_STABILIZE_MS);
 
-		if (value < min)
-			min = value;
+		/* Reset counter before measurement */
+		counter_reset(ecnt->cnt);
 
-		if (value > max)
-			max = value;
+		/*
+		 * Wait for enough pulses or timeout.
+		 * - Exit early once we have COUNTER_MIN_PERIODS periods
+		 * - If no first pulse by half the window, abort early
+		 * - Full timeout as fallback
+		 */
+		elapsed = 0;
+		while (elapsed < COUNTER_MEAS_TIME_MS) {
+			osDelay(COUNTER_POLL_MS);
+			elapsed += COUNTER_POLL_MS;
 
-		sum += value;
-		sumcnt++;
+			/* Enough periods collected - done */
+			if (ecnt->cnt->period_cnt >= COUNTER_MIN_PERIODS)
+				break;
 
+			/* Half window passed with no pulse - no point waiting */
+			if (elapsed >= COUNTER_MEAS_TIME_MS / 2 &&
+			    !ecnt->cnt->started)
+				break;
+		}
+
+		/* Convert to speed: higher value = faster rotation */
+		value = counter_speed(ecnt->cnt);
+
+		/* Power off - sleep between measurements */
+		counter_power_off(ecnt->cnt);
+
+		/* Update actual value */
 		xSemaphoreTake(ecnt->actual->mutex, portMAX_DELAY);
 		ecnt->actual->count = value;
 		xSemaphoreGive(ecnt->actual->mutex);
 
-		if ((xTaskGetTickCount() - psen) >=
-				pdMS_TO_TICKS(ecnt->params->period_sen * 1000))
-		{
-			psen = xTaskGetTickCount();
-			ts = *ecnt->timestamp;
-
-			// max
-			item.value = max;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_max, &item);
-
-			// min
-			if (min != COUNT_MIN_INIT)
-				item.value = min;
-			else
-				item.value = 0;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_min, &item);
-
-			// avg
-			if (sumcnt)
-				item.value = sum / sumcnt;
-			else
-				item.value = 0;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_avg, &item);
-
-			min = COUNT_MIN_INIT;
-			max = 0;
-			sum = 0;
-			sumcnt = 0;
-		}
+		/* Update accumulator for min/avg/max aggregation */
+		counter_accum_update(ecnt->cnt, value);
 	}
 }
 
