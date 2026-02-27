@@ -36,6 +36,8 @@ static void task(void *argument)
 		xEventGroupWaitBits(sync_events, SYNC_BIT_ECOUNTER,
 				pdTRUE, pdFALSE, portMAX_DELAY);
 
+		led_blink_set(2);
+
 		/* Power on and stabilize */
 		counter_power_on(ecnt->cnt);
 		osDelay(COUNTER_STABILIZE_MS);
