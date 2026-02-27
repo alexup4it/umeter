@@ -767,7 +767,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
@@ -795,11 +795,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin EXT_WDG_Pin */
-  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin;
+  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin */
+  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : EXT_WDG_Pin (Hi-Z, no pull) */
+  GPIO_InitStruct.Pin = EXT_WDG_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin SPI2_CS_Pin MDM_EN_PRE_Pin
