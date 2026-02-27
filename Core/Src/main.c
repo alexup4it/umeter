@@ -226,7 +226,8 @@ void hz_callback(TimerHandle_t timer)
 	if (params.mtime_count && (sync_sec % params.mtime_count == 0))
 		bits |= SYNC_BIT_ECOUNTER;
 
-	if (params.period_sen && (sync_sec % params.period_sen == 0))
+	if (params.period_sen && sync_sec >=5 && 
+      ((sync_sec - 5) % params.period_sen == 0))
 		bits |= SYNC_BIT_SENSORS;
 
 	/* APP fires 10 seconds after the aligned boundary so that sensors
