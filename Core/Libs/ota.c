@@ -279,7 +279,7 @@ void ota_task(struct ota *ota)
 
 	for (;;)
 	{
-		osDelay(30 * 60 * 1000); // TODO: Increase
+		osDelay(OTA_CHECK_INTERVAL_MS);
 
 startup:
 		// Request firmware list
