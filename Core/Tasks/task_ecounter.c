@@ -7,11 +7,6 @@
 
 #include "ptasks.h"
 
-#include <stdlib.h>
-#include <string.h>
-
-#define COUNT_MIN_INIT 0xFFFFFFFF
-
 static osThreadId_t handle;
 static const osThreadAttr_t attributes = {
   .name = "ecounter",
@@ -23,18 +18,10 @@ static const osThreadAttr_t attributes = {
 static void task(void *argument)
 {
 	struct ecounter *ecnt = argument;
-	struct item item;
-
 	uint32_t count = 0;
-	size_t sumcnt = 0;
-	uint32_t min = COUNT_MIN_INIT;
-	uint32_t max = 0;
-	uint32_t sum = 0;
 	uint32_t value;
-	uint32_t ts;
 
 	TickType_t wake = xTaskGetTickCount();
-	TickType_t psen = xTaskGetTickCount();
 
 	counter_power_on(ecnt->cnt);
 	osDelay(10);
@@ -48,51 +35,11 @@ static void task(void *argument)
 		value = counter(ecnt->cnt) - count;
 		count = counter(ecnt->cnt);
 
-		if (value < min)
-			min = value;
-
-		if (value > max)
-			max = value;
-
-		sum += value;
-		sumcnt++;
-
 		xSemaphoreTake(ecnt->actual->mutex, portMAX_DELAY);
 		ecnt->actual->count = value;
 		xSemaphoreGive(ecnt->actual->mutex);
 
-		if ((xTaskGetTickCount() - psen) >=
-				pdMS_TO_TICKS(ecnt->params->period_sen * 1000))
-		{
-			psen = xTaskGetTickCount();
-			ts = *ecnt->timestamp;
-
-			// max
-			item.value = max;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_max, &item);
-
-			// min
-			if (min != COUNT_MIN_INIT)
-				item.value = min;
-			else
-				item.value = 0;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_min, &item);
-
-			// avg
-			if (sumcnt)
-				item.value = sum / sumcnt;
-			else
-				item.value = 0;
-			item.timestamp = ts;
-			mqueue_set(ecnt->qec_avg, &item);
-
-			min = COUNT_MIN_INIT;
-			max = 0;
-			sum = 0;
-			sumcnt = 0;
-		}
+		counter_accum_update(ecnt->cnt, value);
 	}
 }
 

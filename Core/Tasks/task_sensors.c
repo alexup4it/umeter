@@ -68,7 +68,6 @@ static void set_angle_offset(params_t *params, int32_t angle)
 static void task(void *argument)
 {
 	struct sensors *sens = argument;
-	struct item item;
 	int avail = 0; // Sensor is available (bit mask)
 	int drdy; // Sensor data was successfully read (bit mask)
 	int ret;
@@ -163,24 +162,28 @@ static void task(void *argument)
 			sens->actual->angle = angle_wo;
 		xSemaphoreGive(sens->actual->mutex);
 
-		// Add sensor readings to queues
-		if (drdy & DRDY_TMP)
+		// Build combined sensor record
 		{
-			item.value = temperature;
-			item.timestamp = ts;
-			mqueue_set(sens->qtmp, &item);
-		}
-		if (drdy & DRDY_HUM)
-		{
-			item.value = humidity;
-			item.timestamp = ts;
-			mqueue_set(sens->qhum, &item);
-		}
-		if (drdy & DRDY_ANG)
-		{
-			item.value = angle_wo;
-			item.timestamp = ts;
-			mqueue_set(sens->qang, &item);
+			struct sensor_record rec;
+			struct counter_accum ca;
+
+			memset(&rec, 0, sizeof(rec));
+			rec.timestamp = ts;
+			if (drdy & DRDY_VOL)
+				rec.voltage = voltage;
+			if (drdy & DRDY_TMP)
+				rec.temperature = temperature;
+			if (drdy & DRDY_HUM)
+				rec.humidity = humidity;
+			if (drdy & DRDY_ANG)
+				rec.angle = angle_wo;
+
+			counter_accum_read(sens->cnt, &ca);
+			rec.count_avg = ca.avg;
+			rec.count_min = ca.min;
+			rec.count_max = ca.max;
+
+			mqueue_set(sens->queue, &rec);
 		}
 
 		if (sens->events)

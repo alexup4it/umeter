@@ -345,12 +345,12 @@ int main(void)
 
   // sens
   memset(&sens, 0, sizeof(sens));
-  sens.qtmp = mqueue_create(SENSORS_QUEUE_SECNUM);
-  sens.qhum = mqueue_create(SENSORS_QUEUE_SECNUM);
-  sens.qang = mqueue_create(SENSORS_QUEUE_SECNUM);
+  sens.queue = mqueue_create(SENSORS_QUEUE_SECNUM,
+		  sizeof(struct sensor_record));
   sens.avlt = &avlt;
   sens.pot = &pot;
   sens.aht = &aht;
+  sens.cnt = &cnt;
   sens.timestamp = &timestamp;
   sens.params = &params;
   sens.actual = &actual;
@@ -358,11 +358,7 @@ int main(void)
 
   // ecnt
   memset(&ecnt, 0, sizeof(ecnt));
-  ecnt.qec_avg = mqueue_create(SENSORS_QUEUE_SECNUM);
-  ecnt.qec_max = mqueue_create(SENSORS_QUEUE_SECNUM);
-  ecnt.qec_min = mqueue_create(SENSORS_QUEUE_SECNUM);
   ecnt.cnt = &cnt;
-  ecnt.timestamp = &timestamp;
   ecnt.params = &params;
   ecnt.actual = &actual;
 
@@ -371,7 +367,6 @@ int main(void)
   app.timestamp = &timestamp;
   app.params = &params;
   app.sens = &sens;
-  app.ecnt = &ecnt;
   app.mod = &mod;
   app.bl = &bl;
 

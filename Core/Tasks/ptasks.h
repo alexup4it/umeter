@@ -17,7 +17,19 @@
 #include "mqueue.h"
 #include "ota.h"
 
-#define SENSORS_QUEUE_SECNUM 16
+#define SENSORS_QUEUE_SECNUM 48
+
+struct sensor_record
+{
+	uint32_t timestamp;
+	int32_t voltage;
+	int32_t temperature;
+	int32_t humidity;
+	int32_t angle;
+	uint32_t count_avg;
+	uint32_t count_min;
+	uint32_t count_max;
+};
 
 struct actual
 {
@@ -34,13 +46,12 @@ struct actual
 
 struct sensors
 {
-	mqueue_t *qtmp;
-	mqueue_t *qhum;
-	mqueue_t *qang;
+	mqueue_t *queue;
 
 	struct avoltage *avlt;
 	struct as5600 *pot;
 	struct aht20 *aht;
+	struct counter *cnt;
 	volatile uint32_t *timestamp;
 	params_t *params;
 
@@ -50,12 +61,7 @@ struct sensors
 
 struct ecounter
 {
-	mqueue_t *qec_avg;
-	mqueue_t *qec_max;
-	mqueue_t *qec_min;
-
 	struct counter *cnt;
-	volatile uint32_t *timestamp;
 	params_t *params;
 
 	struct actual *actual;
@@ -65,7 +71,6 @@ struct app
 {
 	struct sim800l *mod;
 	struct sensors *sens;
-	struct ecounter *ecnt;
 
 	volatile uint32_t *timestamp;
 	volatile struct bl_params *bl;

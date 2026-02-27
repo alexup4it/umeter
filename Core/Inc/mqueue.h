@@ -12,12 +12,6 @@
 
 #include "mfifo.h"
 
-struct item
-{
-	uint32_t value;
-	uint32_t timestamp;
-};
-
 typedef struct
 {
 	struct mfifo mfifo;
@@ -25,7 +19,7 @@ typedef struct
 
 
 int mqueue_init(struct w25q_s *mem);
-mqueue_t *mqueue_create(size_t secnum);
+mqueue_t *mqueue_create(size_t secnum, size_t elsize);
 int mqueue_set(mqueue_t *queue, const void *element);
 int mqueue_get(mqueue_t *queue, void *element);
 int mqueue_is_empty(mqueue_t *queue);

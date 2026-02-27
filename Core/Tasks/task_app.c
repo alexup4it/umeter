@@ -9,6 +9,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <ctype.h>
 
 #define JSMN_HEADER
@@ -33,9 +34,6 @@ extern struct logger logger;
 #define MAX_QTY_FROM_QUEUE 4
 
 #define NET_LEV_MIN -113
-
-#define SENSORS_BUF_LEN (MAX_QTY_FROM_QUEUE * sizeof(struct item))
-#define SENSORS_STR_LEN (4 * ((SENSORS_BUF_LEN + 2) / 3) + 1)
 
 #define HTTP_TIMEOUT_1MIN 60000
 #define HTTP_TIMEOUT_2MIN 120000
@@ -62,6 +60,14 @@ struct netprms
 	int32_t lev;
 };
 
+struct sensor_item
+{
+	uint32_t value;
+	uint32_t timestamp;
+};
+
+#define SENSORS_BUF_LEN (MAX_QTY_FROM_QUEUE * sizeof(struct sensor_item))
+#define SENSORS_STR_LEN (4 * ((SENSORS_BUF_LEN + 2) / 3) + 1)
 
 static void http_callback(int status, void *data)
 {
@@ -135,19 +141,17 @@ static int parse_json_time(const char *response, uint32_t *ts)
 	return 0;
 }
 
-static void sensor_base64(mqueue_t *queue, char *buf)
+static int sensor_read(mqueue_t *queue, struct sensor_record *recs, int max)
 {
-	struct item item[MAX_QTY_FROM_QUEUE];
-	size_t enclen;
 	int i = 0;
 	int ret;
 
 	for (;;)
 	{
-		if (i >= MAX_QTY_FROM_QUEUE)
+		if (i >= max)
 			break;
 
-		ret = mqueue_get(queue, &item[i]);
+		ret = mqueue_get(queue, &recs[i]);
 		if (ret == -MFIFO_ERR_INVALID_CRC)
 			continue;
 		if (ret)
@@ -156,7 +160,22 @@ static void sensor_base64(mqueue_t *queue, char *buf)
 		i++;
 	}
 
-	base64_encode((unsigned char *) item, sizeof(struct item) * i, buf,
+	return i;
+}
+
+static void sensor_field_base64(struct sensor_record *recs, int count,
+		size_t offset, char *buf)
+{
+	struct sensor_item sensor_items[MAX_QTY_FROM_QUEUE];
+	size_t enclen;
+
+	for (int i = 0; i < count; i++)
+	{
+		sensor_items[i].timestamp = recs[i].timestamp;
+		sensor_items[i].value = *(uint32_t *)((uint8_t *)&recs[i] + offset);
+	}
+
+	base64_encode((unsigned char *) sensor_items, sizeof(struct sensor_item) * count, buf,
 			&enclen);
 	buf[enclen] = '\0';
 }
@@ -313,8 +332,6 @@ static void task(void *argument)
 	char hmac[HMAC_BASE64_LEN];
 	char request[512]; // NOTE: ?
 
-	char sensor[SENSORS_STR_LEN];
-
 	// post buffers
 	post.url = url;
 	post.req_auth = hmac;
@@ -394,7 +411,7 @@ static void task(void *argument)
 				vTaskDelayUntil(&wake, period);
 		}
 
-		// Voltage and distance
+		// Voltage
 		xSemaphoreTake(app->sens->actual->mutex, portMAX_DELAY);
 		voltage = app->sens->actual->voltage;
 		xSemaphoreGive(app->sens->actual->mutex);
@@ -404,43 +421,51 @@ static void task(void *argument)
 		strjson_uint(request, "uid", app->params->id);
 		strjson_uint(request, "ts", *app->timestamp);
 		strjson_uint(request, "ticks", xTaskGetTickCount());
-		if (voltage)
+		if (voltage) {
 			strjson_int(request, "bat", voltage);
-		sensor_base64(app->ecnt->qec_avg, sensor); /* Counter [avg] */
-		if (*sensor)
-			strjson_str(request, "count", sensor);
-		sensor_base64(app->ecnt->qec_min, sensor); /* Counter [min] */
-		if (*sensor)
-			strjson_str(request, "count_min", sensor);
-		sensor_base64(app->ecnt->qec_max, sensor); /* Counter [max] */
-		if (*sensor)
-			strjson_str(request, "count_max", sensor);
-		sensor_base64(app->sens->qtmp, sensor); /* Temperature */
-		if (*sensor)
-			strjson_str(request, "temp", sensor);
-		sensor_base64(app->sens->qhum, sensor); /* Humidity */
-		if (*sensor)
-			strjson_str(request, "hum", sensor);
-		sensor_base64(app->sens->qang, sensor); /* Angle */
-		if (*sensor)
-			strjson_str(request, "angle", sensor);
+		}
+		{
+			struct sensor_record recs[MAX_QTY_FROM_QUEUE];
+			char sensor_records_base64[SENSORS_STR_LEN];
+			int nrecs;
+
+			nrecs = sensor_read(app->sens->queue, recs, MAX_QTY_FROM_QUEUE);
+
+			// sensor_field_base64(recs, nrecs,
+			// 		offsetof(struct sensor_record, voltage), sensor_records_base64);
+			// if (*sensor_records_base64)
+			// 	strjson_str(request, "bat", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, count_avg), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "count", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, count_min), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "count_min", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, count_max), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "count_max", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, temperature), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "temp", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, humidity), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "hum", sensor_records_base64);
+			sensor_field_base64(recs, nrecs,
+					offsetof(struct sensor_record, angle), sensor_records_base64);
+			if (*sensor_records_base64)
+				strjson_str(request, "angle", sensor_records_base64);
+		}
 		strjson_int(request, "tamper", READ_TAMPER);
 
 		while (proc_http_post(app, &post, "/api/data"))
 			vTaskDelayUntil(&wake, period);
 
-		// Are all queues empty?
-		if (!mqueue_is_empty(app->ecnt->qec_avg))
-			continue;
-		if (!mqueue_is_empty(app->ecnt->qec_min))
-			continue;
-		if (!mqueue_is_empty(app->ecnt->qec_max))
-			continue;
-		if (!mqueue_is_empty(app->sens->qtmp))
-			continue;
-		if (!mqueue_is_empty(app->sens->qhum))
-			continue;
-		if (!mqueue_is_empty(app->sens->qang))
+		if (!mqueue_is_empty(app->sens->queue))
 			continue;
 
 		blink();

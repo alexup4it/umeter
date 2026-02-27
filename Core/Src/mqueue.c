@@ -49,7 +49,7 @@ int mqueue_init(struct w25q_s *mem)
 	return 0;
 }
 
-inline static mqueue_t *create(size_t secnum)
+inline static mqueue_t *create(size_t secnum, size_t elsize)
 {
 	size_t len = secnum * W25Q_SECTOR_SIZE;
 	mqueue_t *q;
@@ -63,7 +63,7 @@ inline static mqueue_t *create(size_t secnum)
 		return NULL;
 
 	ret = mfifo_init(&q->mfifo, mqueue.mem, W25Q_PAGE_SIZE, W25Q_SECTOR_SIZE,
-			sizeof(struct item), mqueue.address, secnum);
+			elsize, mqueue.address, secnum);
 	if (ret)
 	{
 		vPortFree(q);
@@ -75,12 +75,12 @@ inline static mqueue_t *create(size_t secnum)
 }
 
 /******************************************************************************/
-mqueue_t *mqueue_create(size_t secnum)
+mqueue_t *mqueue_create(size_t secnum, size_t elsize)
 {
 	mqueue_t *q;
 
 	xSemaphoreTake(mqueue.mutex, portMAX_DELAY);
-	q = create(secnum);
+	q = create(secnum, elsize);
 	xSemaphoreGive(mqueue.mutex);
 
 	return q;
