@@ -13,6 +13,9 @@
 /* Stabilization time after power on (ms) */
 #define COUNTER_STABILIZE_MS 10
 
+/* Polling interval while waiting for pulses (ms) */
+#define COUNTER_POLL_MS 50
+
 static osThreadId_t handle;
 static const osThreadAttr_t attributes = {
   .name = "ecounter",
@@ -25,6 +28,7 @@ static void task(void *argument)
 {
 	struct ecounter *ecnt = argument;
 	uint32_t value;
+	uint32_t elapsed;
 
 	TickType_t wake = xTaskGetTickCount();
 
@@ -37,11 +41,29 @@ static void task(void *argument)
 		/* Reset counter before measurement */
 		counter_reset(ecnt->cnt);
 
-		/* Measure for window */
-		osDelay(COUNTER_MEAS_TIME_MS);
+		/*
+		 * Wait for enough pulses or timeout.
+		 * - Exit early once we have COUNTER_MIN_PERIODS periods
+		 * - If no first pulse by half the window, abort early
+		 * - Full timeout as fallback
+		 */
+		elapsed = 0;
+		while (elapsed < COUNTER_MEAS_TIME_MS) {
+			osDelay(COUNTER_POLL_MS);
+			elapsed += COUNTER_POLL_MS;
 
-		/* Read count */
-		value = counter(ecnt->cnt);
+			/* Enough periods collected - done */
+			if (ecnt->cnt->period_cnt >= COUNTER_MIN_PERIODS)
+				break;
+
+			/* Half window passed with no pulse - no point waiting */
+			if (elapsed >= COUNTER_MEAS_TIME_MS / 2 &&
+			    !ecnt->cnt->started)
+				break;
+		}
+
+		/* Convert to speed: higher value = faster rotation */
+		value = counter_speed(ecnt->cnt);
 
 		/* Power off - sleep between measurements */
 		counter_power_off(ecnt->cnt);
