@@ -195,8 +195,8 @@ static void task(void *argument)
 		}
 
 //		vTaskDelayUntil(&wake, pdMS_TO_TICKS(sens->params->period_sen * 1000));
-		ulTaskNotifyTake(pdTRUE,
-				pdMS_TO_TICKS(sens->params->period_sen * 1000));
+		xEventGroupWaitBits(sync_events, SYNC_BIT_SENSORS,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 	}
 }
 
@@ -209,8 +209,6 @@ void task_sensors(struct sensors *sens)
 /******************************************************************************/
 void task_sensors_notify(struct sensors *sens)
 {
-	BaseType_t woken = pdFALSE;
-
 	atomic_inc(&sens->events);
-	vTaskNotifyGiveFromISR(handle, &woken);
+	xEventGroupSetBits(sync_events, SYNC_BIT_SENSORS);
 }

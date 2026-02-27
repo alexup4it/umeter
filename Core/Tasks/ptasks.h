@@ -7,6 +7,7 @@
 
 #include "cmsis_os.h"
 #include "semphr.h"
+#include "event_groups.h"
 
 #include "avoltage.h"
 #include "counter.h"
@@ -87,6 +88,15 @@ struct system
 
 
 struct watchdog;
+
+/* Sync event group bits — set by hz_callback, waited on by tasks */
+#define SYNC_BIT_ECOUNTER   (1 << 0)
+#define SYNC_BIT_SENSORS    (1 << 1)
+#define SYNC_BIT_APP        (1 << 2)
+#define SYNC_BIT_BLINK      (1 << 3)
+#define SYNC_BIT_WATCHDOG   (1 << 4)
+
+extern EventGroupHandle_t sync_events;
 
 void task_siface(struct siface *siface);
 void task_sim800l(struct sim800l *mod);

@@ -18,8 +18,9 @@ static void task(void *argument)
 {
 	for (;;)
 	{
+		xEventGroupWaitBits(sync_events, SYNC_BIT_WATCHDOG,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 		watchdog_reset();
-		osDelay(1000);
 	}
 }
 

@@ -30,10 +30,12 @@ static void task(void *argument)
 	uint32_t value;
 	uint32_t elapsed;
 
-	TickType_t wake = xTaskGetTickCount();
-
 	for (;;)
 	{
+		/* Wait for sync signal from hz_timer */
+		xEventGroupWaitBits(sync_events, SYNC_BIT_ECOUNTER,
+				pdTRUE, pdFALSE, portMAX_DELAY);
+
 		/* Power on and stabilize */
 		counter_power_on(ecnt->cnt);
 		osDelay(COUNTER_STABILIZE_MS);
@@ -75,9 +77,6 @@ static void task(void *argument)
 
 		/* Update accumulator for min/avg/max aggregation */
 		counter_accum_update(ecnt->cnt, value);
-
-		/* Sleep until next measurement cycle */
-		vTaskDelayUntil(&wake, pdMS_TO_TICKS(ecnt->params->mtime_count * 1000));
 	}
 }
 

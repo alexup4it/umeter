@@ -320,9 +320,7 @@ static void task(void *argument)
 	struct sim800l_netscan netscan;
 	struct sim800l_http get, post;
 	struct netprms netprms;
-	TickType_t period;
 	TickType_t updt;
-	TickType_t wake;
 	int voltage;
 	int avail;
 	int ret;
@@ -344,15 +342,14 @@ static void task(void *argument)
 	netprms.lev = NET_LEV_MIN;
 	netscan.context = &netprms;
 
-	period = pdMS_TO_TICKS(app->params->period_app * 1000);
 	updt = xTaskGetTickCount();
-	wake = xTaskGetTickCount();
 
 	// >>>
 
 	// <- /api/time
 	while (proc_http_get_time(app, &get, hmac))
-		vTaskDelayUntil(&wake, period);
+		xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 
 	// Available sensors
 	xSemaphoreTake(app->sens->actual->mutex, portMAX_DELAY);
@@ -378,7 +375,8 @@ static void task(void *argument)
 	strjson_int(request, "sens", avail);
 
 	while (proc_http_post(app, &post, "/api/info"))
-		vTaskDelayUntil(&wake, period);
+		xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 
 	// netscan
 	ret = sim800l_netscan(app->mod, &netscan, netscan_callback,
@@ -397,7 +395,8 @@ static void task(void *argument)
 	strjson_int(request, "lev", netprms.lev);
 
 	while (proc_http_post(app, &post, "/api/cnet"))
-		vTaskDelayUntil(&wake, period);
+		xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 
 	for (;;)
 	{
@@ -407,7 +406,8 @@ static void task(void *argument)
 
 			// <- /api/time
 			while (proc_http_get_time(app, &get, hmac))
-				vTaskDelayUntil(&wake, period);
+				xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+						pdTRUE, pdFALSE, portMAX_DELAY);
 		}
 
 		// Voltage
@@ -462,13 +462,15 @@ static void task(void *argument)
 		strjson_int(request, "tamper", READ_TAMPER);
 
 		while (proc_http_post(app, &post, "/api/data"))
-			vTaskDelayUntil(&wake, period);
+			xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+					pdTRUE, pdFALSE, portMAX_DELAY);
 
 		if (!mqueue_is_empty(app->sens->queue))
 			continue;
 
 		blink();
-		vTaskDelayUntil(&wake, period);
+		xEventGroupWaitBits(sync_events, SYNC_BIT_APP,
+				pdTRUE, pdFALSE, portMAX_DELAY);
 	}
 }
 
