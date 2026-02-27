@@ -92,15 +92,12 @@ DMA_HandleTypeDef hdma_usart2_tx;
 osThreadId_t defHandle;
 const osThreadAttr_t def_attributes = {
   .name = "def",
-  .stack_size = 128 * 4,
+  .stack_size = 96 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
 
 volatile struct bl_params bl __attribute__((section(".noinit")));
-
-StaticTimer_t hz_timer_buf;
-TimerHandle_t hz_timer_handle;
 
 volatile uint32_t timestamp;
 
@@ -215,30 +212,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 }
 
-void hz_callback(TimerHandle_t timer)
-{
-	static uint32_t sync_sec = 0;
-	EventBits_t bits = 0;
 
-	atomic_inc(&timestamp);
-	sync_sec++;
-
-	if (params.mtime_count && (sync_sec % params.mtime_count == 0))
-		bits |= SYNC_BIT_ECOUNTER;
-
-	if (params.period_sen && (sync_sec % params.period_sen == 0))
-		bits |= SYNC_BIT_SENSORS;
-
-	if (params.period_app && (sync_sec % params.period_app == 0))
-		bits |= SYNC_BIT_APP;
-
-	if (sync_sec % 5 == 0)
-		bits |= SYNC_BIT_BLINK;
-
-	bits |= SYNC_BIT_WATCHDOG;
-
-	xEventGroupSetBits(sync_events, bits);
-}
 
 void btn_callback(void)
 {
@@ -755,10 +729,6 @@ int main(void)
 
   sync_events = xEventGroupCreate();
 
-  hz_timer_handle = xTimerCreateStatic("hz", pdMS_TO_TICKS(1000), pdTRUE,
-		  (void *) 0, hz_callback, &hz_timer_buf);
-  xTimerStart(hz_timer_handle, 0);
-
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
@@ -773,6 +743,7 @@ int main(void)
   /* add threads, ... */
 
   task_watchdog();
+  task_blink();
 	task_logging(&sys);
   task_siface(&siface);
   task_sensors(&sens);
@@ -1187,13 +1158,36 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_task_default */
 void task_default(void *argument)
 {
+  uint32_t sync_sec = 0;
+  TickType_t wake = xTaskGetTickCount();
+  EventBits_t bits;
+
   for(;;)
   {
-    xEventGroupWaitBits(sync_events, SYNC_BIT_BLINK,
-            pdTRUE, pdFALSE, portMAX_DELAY);
-    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
-    osDelay(10);
-    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
+    vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000));
+    atomic_inc(&timestamp);
+    sync_sec++;
+    bits = 0;
+
+    if (params.mtime_count && (sync_sec % params.mtime_count == 0))
+      bits |= SYNC_BIT_ECOUNTER;
+
+    if (params.period_sen && sync_sec >= 5 &&
+        ((sync_sec - 5) % params.period_sen == 0))
+      bits |= SYNC_BIT_SENSORS;
+
+    /* APP fires 10 seconds after the aligned boundary so that sensors
+     * have time to read and write fresh data before app reads the queue */
+    if (params.period_app && sync_sec >= 10 &&
+        ((sync_sec - 10) % params.period_app == 0))
+      bits |= SYNC_BIT_APP;
+
+    if (sync_sec % 5 == 0)
+      bits |= SYNC_BIT_BLINK;
+
+    bits |= SYNC_BIT_WATCHDOG;
+
+    xEventGroupSetBits(sync_events, bits);
   }
 }
 

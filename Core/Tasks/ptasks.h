@@ -98,6 +98,8 @@ struct watchdog;
 
 extern EventGroupHandle_t sync_events;
 
+void led_blink_set(uint8_t count);
+
 void task_siface(struct siface *siface);
 void task_sim800l(struct sim800l *mod);
 void task_ota(struct ota *ota);
@@ -108,6 +110,7 @@ void task_button(struct button *btn);
 void task_sensors(struct sensors *sens);
 void task_ecounter(struct ecounter *ecnt);
 
+void task_blink(void);
 void task_sensors_notify(struct sensors *sens);
 
 #endif /* UMETER_TASKS_H_ */

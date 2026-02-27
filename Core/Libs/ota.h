@@ -15,6 +15,8 @@
 #include "hmac.h"
 #include "w25q_s.h"
 
+#define OTA_CHECK_INTERVAL_MS (2 * 60 * 60 * 1000) // Check for updates every 2 hours
+
 #define OTA_URL_SIZE 64
 
 struct ota

@@ -119,6 +119,8 @@ static void task(void *argument)
 
 	for (;;)
 	{
+		led_blink_set(3);
+
 		// Update sensor readings
 		drdy = 0;
 
