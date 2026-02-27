@@ -57,12 +57,12 @@ static void set_angle_offset(params_t *params, int32_t angle)
 
 	/* todo: log offset angle value */
 
-	osDelay(500);
 	watchdog_reset();
 	vTaskSuspendAll();
 	params_set(&uparams);
+	xTaskResumeAll();
 
-	NVIC_SystemReset(); // --> RESET
+	params->offset_angle = angle;
 }
 
 static void task(void *argument)
