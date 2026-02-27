@@ -18,10 +18,13 @@ struct avoltage
 	SemaphoreHandle_t mutex;
 	ADC_HandleTypeDef *adc;
 	int ratio;
+	GPIO_TypeDef *en_port;
+	uint16_t en_pin;
 };
 
 
-void avoltage_init(struct avoltage *avlt, ADC_HandleTypeDef *adc, int ratio);
+void avoltage_init(struct avoltage *avlt, ADC_HandleTypeDef *adc, int ratio,
+		GPIO_TypeDef *en_port, uint16_t en_pin);
 int avoltage_calib(struct avoltage *avlt);
 int avoltage(struct avoltage *avlt);
 

@@ -382,6 +382,106 @@ void RTC_WKUP_IRQHandler(void)
 }
 
 /*---------------------------------------------------------------------------*/
+/* Low-power GPIO helpers for Stop mode                                      */
+/*---------------------------------------------------------------------------*/
+
+/*
+ * Before entering Stop mode, reconfigure all floating / AF pins to analog
+ * to eliminate leakage through external pull-ups, flash bus, etc.
+ * Analog mode gives the lowest possible GPIO current (no input Schmitt
+ * trigger, no pull, no AF driver).
+ *
+ * Pins that MUST keep their state (output-driven power-enable, CS, etc.)
+ * are left untouched.
+ */
+static void gpio_enter_stop(void)
+{
+	GPIO_InitTypeDef g = {0};
+	g.Mode  = GPIO_MODE_ANALOG;
+	g.Pull  = GPIO_NOPULL;
+	g.Speed = GPIO_SPEED_FREQ_LOW;
+
+	/* --- W25Q flash: deep power-down BEFORE disabling SPI2 ---
+	 * Reduces flash standby from ~25 µA to ~1 µA.
+	 * SPI2 must still be functional at this point. */
+	w25q_hw_deinit(&mem.mem);
+
+	/* --- SPI2 bus (PB13-SCK, PB14-MISO, PB15-MOSI) ---
+	 * Left in AF_PP after MX_SPI2_Init → leaks into W25Q flash.
+	 * CS (PB12) stays high (output) to keep flash deselected. */
+	g.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- I2C1 (PB6-SCL, PB7-SDA) ---
+	 * DeInit leaves them floating; external pull-ups → ~0.7 mA each. */
+	g.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- I2C2 (PB10-SCL, PB3-SDA) ---
+	 * Same pull-up issue. */
+	g.Pin = GPIO_PIN_3 | GPIO_PIN_10;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- USART2 (PA2-TX, PA3-RX) --- already DeInit when modem off,
+	 * but HAL_GPIO_DeInit only resets to input-float → set analog. */
+	g.Pin = GPIO_PIN_2 | GPIO_PIN_3;
+	HAL_GPIO_Init(GPIOA, &g);
+
+	/* --- EXTI0 Hall sensor input (PA0) --- already masked in EXTI,
+	 * but the pin itself as input-float picks up noise → analog. */
+	g.Pin = GPIO_PIN_0;
+	HAL_GPIO_Init(GPIOA, &g);
+
+	/* --- ADC1: disable peripheral to cut analog bias current --- */
+	__HAL_RCC_ADC1_CLK_DISABLE();
+
+	/* --- Disable DMA1 clock (no active transfers during Stop) --- */
+	__HAL_RCC_DMA1_CLK_DISABLE();
+
+	/* --- Disable SPI2 clock --- */
+	__HAL_RCC_SPI2_CLK_DISABLE();
+
+	/* --- Disable GPIOH clock (only HSE pins, unused in Stop) --- */
+	__HAL_RCC_GPIOH_CLK_DISABLE();
+}
+
+/*
+ * After waking from Stop, restore peripheral pins and clocks.
+ * SystemClock_Config() has already been called at this point.
+ */
+static void gpio_exit_stop(void)
+{
+	GPIO_InitTypeDef g = {0};
+
+	/* Re-enable port clocks that were disabled */
+	__HAL_RCC_GPIOH_CLK_ENABLE();
+	__HAL_RCC_DMA1_CLK_ENABLE();
+	__HAL_RCC_SPI2_CLK_ENABLE();
+	__HAL_RCC_ADC1_CLK_ENABLE();
+
+	/* --- Restore SPI2 pins to AF5 --- */
+	g.Pin       = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+	g.Mode      = GPIO_MODE_AF_PP;
+	g.Pull      = GPIO_NOPULL;
+	g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+	g.Alternate = GPIO_AF5_SPI2;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	/* --- W25Q flash: release deep power-down AFTER SPI2 is restored --- */
+	w25q_hw_init(&mem.mem);
+
+	/* --- Restore EXTI0 (Hall sensor) as falling-edge interrupt --- */
+	g.Pin  = GPIO_PIN_0;
+	g.Mode = GPIO_MODE_IT_FALLING;
+	g.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &g);
+
+	/* I2C1/I2C2 and USART2 pins are restored lazily by their hw_init
+	 * callbacks (as5600, aht20, sim800l) when the peripheral is
+	 * actually needed — no need to restore here. */
+}
+
+/*---------------------------------------------------------------------------*/
 /* Custom tickless idle: RTC wakeup + Stop mode                              */
 /*---------------------------------------------------------------------------*/
 
@@ -430,6 +530,9 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime)
 	 * noise generates spurious falling edges that wake MCU instantly */
 	EXTI->IMR &= ~EXTI_IMR_MR0;
 
+	/* Reconfigure GPIO/peripherals for minimal leakage */
+	gpio_enter_stop();
+
 	/* Set RTC wakeup timer */
 	rtc_wakeup_set(sleep_ms);
 
@@ -446,6 +549,9 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime)
 
 	/* Restore system clock (HSE + PLL) after Stop mode */
 	SystemClock_Config();
+
+	/* Restore GPIO/peripherals after wakeup */
+	gpio_exit_stop();
 
 	/* Resume HAL tick */
 	HAL_ResumeTick();
@@ -580,7 +686,7 @@ int main(void)
   aht20_init(&aht, &hi2c2, MX_I2C2_Init, AHT20_EN_GPIO_Port,
 		  AHT20_EN_Pin /* 0x70 */);
   counter_init(&cnt, HALL_EN_GPIO_Port, HALL_EN_Pin);
-  avoltage_init(&avlt, &hadc1, 2);
+  avoltage_init(&avlt, &hadc1, 2, VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin);
 
   //
   mqueue_init(&mem);
@@ -1013,7 +1119,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
+  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
                           |MDM_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
@@ -1051,10 +1157,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin SPI2_CS_Pin MDM_EN_PRE_Pin
-                           LED_MB_Pin MDM_RST_Pin */
-  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|SPI2_CS_Pin|MDM_EN_PRE_Pin
-                          |LED_MB_Pin|MDM_RST_Pin;
+  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin VBAT_MEAS_EN_Pin SPI2_CS_Pin
+                           MDM_EN_PRE_Pin LED_MB_Pin MDM_RST_Pin */
+  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|SPI2_CS_Pin
+                          |MDM_EN_PRE_Pin|LED_MB_Pin|MDM_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
