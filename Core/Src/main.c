@@ -227,6 +227,23 @@ void sim800l_hw_init_cb(void)
 	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
 }
 
+void PreSleepProcessing(uint32_t ulExpectedIdleTime)
+{
+	/* Refresh watchdog before sleeping — guarantees WDG reset at least
+	 * every ~199 ms (max tickless period on 24-bit SysTick @ 84 MHz),
+	 * well within the 1.6 s external WDG timeout */
+	watchdog_reset();
+
+	/* Suspend HAL tick (TIM1) — without this, TIM1 fires at 1 kHz
+	 * and wakes the CPU every 1 ms, completely negating tickless idle */
+	HAL_SuspendTick();
+}
+
+void PostSleepProcessing(uint32_t ulExpectedIdleTime)
+{
+	HAL_ResumeTick();
+}
+
 //
 static void stack_color(void)
 {
