@@ -23,8 +23,10 @@
 #include "fws.h"
 
 #include "logger.h"
+#ifdef LOGGER
 #define TAG "APP"
 extern struct logger logger;
+#endif
 
 #define JSON_MAX_TOKENS 8
 
@@ -225,7 +227,9 @@ static int parse_time(struct app *app, struct sim800l_http *http,
 		return -1;
 
 	*app->timestamp = temp;
+#ifdef LOGGER
 	logger_add_str(&logger, TAG, false, http->response);
+#endif
 
 	return 0;
 }
@@ -268,7 +272,7 @@ static int proc_http_get_time(struct app *app, struct sim800l_http *http,
  * @info: http->req_auth must be already allocated
  * @info: http->request must be already allocated and filled with data
  */
-static int proc_http_post(struct app *app, struct sim800l_http *http,
+	static int proc_http_post(struct app *app, struct sim800l_http *http,
 		const char *api)
 {
 	int status;

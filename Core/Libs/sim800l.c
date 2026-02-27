@@ -24,8 +24,10 @@
 #define DISABLE_RF
 
 #include "logger.h"
+#ifdef LOGGER
 #define TAG "SIM800L"
 extern struct logger logger;
+#endif
 
 enum status
 {
@@ -122,7 +124,9 @@ static bool wait_for_any(struct sim800l *mod, timeout_t timeout)
 	if (!received)
 		return false;
 
+#ifdef LOGGER
 	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+#endif
 
 	return true;
 }
@@ -151,7 +155,9 @@ static bool wait_for_num(struct sim800l *mod, size_t num, timeout_t timeout)
 			left = 0;
 	}
 
+#ifdef LOGGER
 	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+#endif
 
 	if (mod->rxlen < num)
 		return false;
@@ -183,7 +189,9 @@ static void transmit_data(struct sim800l *mod, const uint8_t *buf, size_t len)
 	mod->txb[len] = '\r';
 	len++;
 
+#ifdef LOGGER
 	logger_add(&logger, TAG, false, (char *) mod->txb, len);
+#endif
 
 	clear_rx_buffer(mod); // ?
 	while (HAL_UART_Transmit_DMA(mod->uart, mod->txb, len) == HAL_BUSY);
@@ -696,7 +704,9 @@ void sim800l_task(struct sim800l *mod)
 				break;
 			}
 
+#ifdef LOGGER
 			logger_add_str(&logger, TAG, false, "sleep...");
+#endif
 
 			// Wait for the task
 			xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);

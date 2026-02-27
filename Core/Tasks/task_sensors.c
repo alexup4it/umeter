@@ -1,8 +1,5 @@
 /*
  * Sensors task
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2025
  */
 
 #include "ptasks.h"
@@ -13,10 +10,13 @@
 #include "atomic.h"
 #include "as5600.h"
 #include "aht20.h"
+#include "watchdog.h"
 
 #include "logger.h"
+#ifdef LOGGER
 #define TAG "SENSORS"
 extern struct logger logger;
+#endif
 
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
@@ -58,6 +58,7 @@ static void set_angle_offset(params_t *params, int32_t angle)
 	/* todo: log offset angle value */
 
 	osDelay(500);
+	watchdog_reset();
 	vTaskSuspendAll();
 	params_set(&uparams);
 
@@ -106,6 +107,7 @@ static void task(void *argument)
 	sens->actual->avail = avail;
 	xSemaphoreGive(sens->actual->mutex);
 
+	#ifdef LOGGER
 	tmp = pvPortMalloc(sizeof(avail) * 8 + 2); // + "b\0"
 	if (tmp)
 	{
@@ -114,6 +116,7 @@ static void task(void *argument)
 		logger_add_str(&logger, TAG, false, tmp);
 		vPortFree(tmp);
 	}
+	#endif
 
 	for (;;)
 	{

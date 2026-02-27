@@ -31,6 +31,7 @@
 #include "appiface.h"
 #include "avoltage.h"
 #include "sim800l.h"
+#include "watchdog.h"
 #include "ptasks.h"
 #include "button.h"
 #include "siface.h"
@@ -103,7 +104,9 @@ uint8_t ub_sif[UART_BUFFER_SIZE];
 params_t params;
 struct button btn;
 struct siface siface;
+#ifdef LOGGER
 struct logger logger;
+#endif
 struct w25q_s mem;
 struct sim800l mod;
 struct ota ota;
@@ -324,7 +327,9 @@ int main(void)
   //
   button_init(&btn, BTN_MB_GPIO_Port, BTN_MB_Pin, btn_callback);
   siface_init(&siface, 32, appiface, &appif);
+#ifdef LOGGER
   logger_init(&logger, &siface);
+#endif
   w25q_s_init(&mem, &hspi2, SPI2_CS_GPIO_Port, SPI2_CS_Pin);
   sim800l_init(&mod, &huart2, MDM_RST_GPIO_Port, MDM_RST_Pin, params.apn);
   ota_init(&ota, &mod, &mem, params.secret, params.url_ota);
@@ -372,11 +377,11 @@ int main(void)
 
   // sys
   memset(&sys, 0, sizeof(sys));
-  sys.ext_pin = EXT_WDG_Pin;
-  sys.ext_port = EXT_WDG_GPIO_Port;
-  sys.wdg = &hiwdg;
   sys.params = &params;
   sys.bl = &bl;
+
+  // wd
+  watchdog_init(&hiwdg, EXT_WDG_GPIO_Port, EXT_WDG_Pin);
 
   //
   /* todo: replace with USB */
@@ -416,7 +421,8 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
 
-  task_system(&sys);
+  task_watchdog();
+	task_logging(&sys);
   task_siface(&siface);
   task_sensors(&sens);
   task_ecounter(&ecnt);

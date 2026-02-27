@@ -1,8 +1,5 @@
 /*
  * Application tasks
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2025
  */
 
 #ifndef UMETER_TASKS_H_
@@ -77,10 +74,6 @@ struct app
 
 struct system
 {
-	IWDG_HandleTypeDef *wdg;
-	GPIO_TypeDef *ext_port;
-	uint16_t ext_pin;
-
 	volatile struct bl_params *bl;
 	params_t *params;
 
@@ -88,11 +81,14 @@ struct system
 };
 
 
+struct watchdog;
+
 void task_siface(struct siface *siface);
 void task_sim800l(struct sim800l *mod);
 void task_ota(struct ota *ota);
 void task_app(struct app *app);
-void task_system(struct system *sys);
+void task_watchdog();
+void task_logging(struct system *sys);
 void task_button(struct button *btn);
 void task_sensors(struct sensors *sens);
 void task_ecounter(struct ecounter *ecnt);
