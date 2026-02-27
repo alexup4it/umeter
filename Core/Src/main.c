@@ -841,8 +841,10 @@ void task_default(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    HAL_GPIO_TogglePin(LED_DB_GPIO_Port, LED_DB_Pin);
-    osDelay(200);
+    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
+    osDelay(25);
+    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
+    osDelay(5000);
   }
   /* USER CODE END 5 */
 }

@@ -100,10 +100,9 @@ static void netscan_callback(int status, void *data)
 
 static void blink(void)
 {
+	HAL_GPIO_WritePin(LED_MB_GPIO_Port, LED_MB_Pin, GPIO_PIN_SET);
 	osDelay(100);
 	HAL_GPIO_WritePin(LED_MB_GPIO_Port, LED_MB_Pin, GPIO_PIN_RESET);
-	osDelay(100);
-	HAL_GPIO_WritePin(LED_MB_GPIO_Port, LED_MB_Pin, GPIO_PIN_SET);
 }
 
 // https://github.com/zserge/jsmn/blob/master/example/simple.c
