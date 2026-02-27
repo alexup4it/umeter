@@ -26,6 +26,7 @@
 
 #include <string.h>
 
+#include "task.h"
 #include "timers.h"
 
 #include "appiface.h"
@@ -60,6 +61,11 @@
 	SIM800L_UART_BUFFER_SIZE : SIFACE_UART_BUFFER_SIZE)
 
 #define STACK_COLOR_WORD 0xACACACAC
+
+/* RTC wakeup timer uses LSI/2 = ~16 kHz clock */
+#define RTC_WKUP_CLK_HZ          16000U
+/* Maximum sleep time limited by external WDG (1.6 s) */
+#define MAX_SLEEP_MS             1000U
 
 /* USER CODE END PD */
 
@@ -227,21 +233,212 @@ void sim800l_hw_init_cb(void)
 	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
 }
 
-void PreSleepProcessing(uint32_t ulExpectedIdleTime)
-{
-	/* Refresh watchdog before sleeping — guarantees WDG reset at least
-	 * every ~199 ms (max tickless period on 24-bit SysTick @ 84 MHz),
-	 * well within the 1.6 s external WDG timeout */
-	watchdog_reset();
+/*---------------------------------------------------------------------------*/
+/* RTC wakeup timer — direct register access (no HAL RTC driver needed)      */
+/*---------------------------------------------------------------------------*/
 
-	/* Suspend HAL tick (TIM1) — without this, TIM1 fires at 1 kHz
-	 * and wakes the CPU every 1 ms, completely negating tickless idle */
-	HAL_SuspendTick();
+static inline void rtc_unlock(void)
+{
+	RTC->WPR = 0xCA;
+	RTC->WPR = 0x53;
 }
 
-void PostSleepProcessing(uint32_t ulExpectedIdleTime)
+static inline void rtc_lock(void)
 {
+	RTC->WPR = 0xFF;
+}
+
+static void rtc_wakeup_init(void)
+{
+	/* Enable PWR clock and backup domain access */
+	__HAL_RCC_PWR_CLK_ENABLE();
+	PWR->CR |= PWR_CR_DBP;
+
+	/* Select LSI as RTC clock source and enable RTC */
+	if ((RCC->BDCR & RCC_BDCR_RTCSEL) != RCC_BDCR_RTCSEL_1)
+	{
+		/* Reset backup domain to change RTC source */
+		RCC->BDCR |= RCC_BDCR_BDRST;
+		RCC->BDCR &= ~RCC_BDCR_BDRST;
+		/* LSI selected (RTCSEL = 10) */
+		RCC->BDCR |= RCC_BDCR_RTCSEL_1;
+	}
+	RCC->BDCR |= RCC_BDCR_RTCEN;
+
+	/* Unlock RTC registers */
+	rtc_unlock();
+
+	/* Enter init mode */
+	RTC->ISR |= RTC_ISR_INIT;
+	while (!(RTC->ISR & RTC_ISR_INITF))
+		;
+
+	/* Set prescalers: AsynchPrediv=127, SynchPrediv=249 (irrelevant for wakeup,
+	 * but needed for valid init) */
+	RTC->PRER = (127U << 16) | 249U;
+
+	/* Exit init mode */
+	RTC->ISR &= ~RTC_ISR_INIT;
+
+	/* Disable wakeup timer to configure it */
+	RTC->CR &= ~RTC_CR_WUTE;
+	while (!(RTC->ISR & RTC_ISR_WUTWF))
+		;
+
+	/* Select clock: RTCCLK/2 (LSI/2 ≈ 16 kHz) → WUCKSEL = 011 */
+	RTC->CR = (RTC->CR & ~RTC_CR_WUCKSEL) | RTC_CR_WUCKSEL_0 | RTC_CR_WUCKSEL_1;
+
+	/* Enable wakeup interrupt */
+	RTC->CR |= RTC_CR_WUTIE;
+
+	/* Clear wakeup flag */
+	RTC->ISR &= ~RTC_ISR_WUTF;
+
+	rtc_lock();
+
+	/* Configure EXTI line 22 (RTC wakeup) — rising edge, interrupt mode */
+	EXTI->IMR |= EXTI_IMR_MR22;
+	EXTI->RTSR |= EXTI_RTSR_TR22;
+	EXTI->PR = EXTI_PR_PR22; /* Clear pending */
+
+	/* Enable RTC_WKUP IRQ in NVIC */
+	HAL_NVIC_SetPriority(RTC_WKUP_IRQn, 15, 0);
+	HAL_NVIC_EnableIRQ(RTC_WKUP_IRQn);
+}
+
+static void rtc_wakeup_set(uint32_t ticks_ms)
+{
+	uint32_t wut;
+
+	if (ticks_ms > MAX_SLEEP_MS)
+		ticks_ms = MAX_SLEEP_MS;
+
+	/* Calculate wakeup timer value: WUT = (ms * RTC_WKUP_CLK_HZ) / 1000 - 1 */
+	wut = (ticks_ms * RTC_WKUP_CLK_HZ) / 1000U;
+	if (wut > 0)
+		wut--;
+	if (wut > 0xFFFF)
+		wut = 0xFFFF;
+
+	rtc_unlock();
+
+	/* Disable wakeup timer */
+	RTC->CR &= ~RTC_CR_WUTE;
+	while (!(RTC->ISR & RTC_ISR_WUTWF))
+		;
+
+	/* Set wakeup auto-reload value */
+	RTC->WUTR = wut;
+
+	/* Clear wakeup flag and EXTI pending */
+	RTC->ISR &= ~RTC_ISR_WUTF;
+	EXTI->PR = EXTI_PR_PR22;
+
+	/* Enable wakeup timer */
+	RTC->CR |= RTC_CR_WUTE;
+
+	rtc_lock();
+}
+
+static void rtc_wakeup_stop(void)
+{
+	rtc_unlock();
+	RTC->CR &= ~RTC_CR_WUTE;
+	RTC->ISR &= ~RTC_ISR_WUTF;
+	rtc_lock();
+	EXTI->PR = EXTI_PR_PR22;
+}
+
+void RTC_WKUP_IRQHandler(void)
+{
+	if (RTC->ISR & RTC_ISR_WUTF)
+	{
+		rtc_unlock();
+		RTC->ISR &= ~RTC_ISR_WUTF;
+		rtc_lock();
+	}
+	EXTI->PR = EXTI_PR_PR22;
+}
+
+/*---------------------------------------------------------------------------*/
+/* Custom tickless idle: RTC wakeup + Stop mode                              */
+/*---------------------------------------------------------------------------*/
+
+void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime)
+{
+	uint32_t sleep_ms;
+
+	/* Cap at MAX_SLEEP_MS for external WDG safety */
+	if (xExpectedIdleTime > pdMS_TO_TICKS(MAX_SLEEP_MS))
+		xExpectedIdleTime = pdMS_TO_TICKS(MAX_SLEEP_MS);
+
+	sleep_ms = xExpectedIdleTime * (1000U / configTICK_RATE_HZ);
+
+	/* Enter critical section (disable interrupts) */
+	__asm volatile("cpsid i" ::: "memory");
+	__asm volatile("dsb");
+	__asm volatile("isb");
+
+	/* Confirm sleep is still valid */
+	if (eTaskConfirmSleepModeStatus() == eAbortSleep)
+	{
+		__asm volatile("cpsie i" ::: "memory");
+		return;
+	}
+
+	/* Stop mode is unsafe when:
+	 *  - USB OTG FS is active (clocks stop → host sees disconnect)
+	 *  - SIM800L modem is on (UART DMA resumes at wrong baud on HSI wakeup)
+	 * Fallback to regular Sleep (WFI) — SysTick keeps running.
+	 */
+	if ((RCC->AHB2ENR & RCC_AHB2ENR_OTGFSEN) ||
+		HAL_GPIO_ReadPin(MDM_EN_GPIO_Port, MDM_EN_Pin) == GPIO_PIN_SET)
+	{
+		__asm volatile("cpsie i" ::: "memory");
+		__WFI();
+		return;
+	}
+
+	/* Refresh watchdog before entering Stop mode */
+	watchdog_reset();
+
+	/* Suspend HAL tick (TIM1) */
+	HAL_SuspendTick();
+
+	/* Mask EXTI0 (Hall sensor) — PA0 floats when sensor is off,
+	 * noise generates spurious falling edges that wake MCU instantly */
+	EXTI->IMR &= ~EXTI_IMR_MR0;
+
+	/* Set RTC wakeup timer */
+	rtc_wakeup_set(sleep_ms);
+
+	/* --- Enter Stop mode (low-power regulator) --- */
+	HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+
+	/* --- Woken up (interrupts still disabled) --- */
+
+	/* Check if RTC wakeup timer fired (full sleep) before clearing */
+	uint32_t wutf = RTC->ISR & RTC_ISR_WUTF;
+
+	/* Stop the RTC wakeup timer */
+	rtc_wakeup_stop();
+
+	/* Restore system clock (HSE + PLL) after Stop mode */
+	SystemClock_Config();
+
+	/* Resume HAL tick */
 	HAL_ResumeTick();
+
+	/* Restore EXTI0 (Hall sensor interrupt) */
+	EXTI->IMR |= EXTI_IMR_MR0;
+
+	/* Re-enable interrupts */
+	__asm volatile("cpsie i" ::: "memory");
+
+	/* Advance the RTOS tick count:
+	 * If RTC WUTF fired — full sleep elapsed.
+	 * If woken by something else — conservative 1 tick. */
+	vTaskStepTick(wutf ? xExpectedIdleTime : 1);
 }
 
 //
@@ -401,6 +598,12 @@ int main(void)
 
   // wd
   watchdog_init(&hiwdg, EXT_WDG_GPIO_Port, EXT_WDG_Pin);
+
+  // RTC wakeup timer for Stop mode
+  rtc_wakeup_init();
+
+  // Flash power-down in Stop mode
+  PWR->CR |= PWR_CR_FPDS;
 
   //
   /* todo: replace with USB */

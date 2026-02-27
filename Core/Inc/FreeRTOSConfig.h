@@ -172,11 +172,6 @@ standard names. */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
 #define configUSE_TICKLESS_IDLE                  1
 #define configEXPECTED_IDLE_TIME_BEFORE_SLEEP    2
-
-extern void PreSleepProcessing(uint32_t ulExpectedIdleTime);
-extern void PostSleepProcessing(uint32_t ulExpectedIdleTime);
-#define configPRE_SLEEP_PROCESSING(x)            PreSleepProcessing(x)
-#define configPOST_SLEEP_PROCESSING(x)           PostSleepProcessing(x)
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */
