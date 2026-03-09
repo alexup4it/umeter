@@ -7,3 +7,5 @@ umeter\ Debug.launch
 
 .idea/
 cmake-build-*/
+
+.osx.project

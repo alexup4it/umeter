@@ -92,7 +92,7 @@ DMA_HandleTypeDef hdma_usart2_tx;
 osThreadId_t defHandle;
 const osThreadAttr_t def_attributes = {
   .name = "def",
-  .stack_size = 96 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
@@ -1087,11 +1087,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|MDM_EN_PRE_Pin|LED_MB_Pin
-                          |MDM_RST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, AHT20_EN_Pin|SENS_EN_Pin|MDM_EN_PRE_Pin|VBAT_MEAS_EN_Pin
+                          |LED_MB_Pin|MDM_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
@@ -1115,23 +1115,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin */
-  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin;
+  /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin EXT_WDG_Pin */
+  GPIO_InitStruct.Pin = HALL_EN_Pin|MDM_EN_Pin|EXT_WDG_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : EXT_WDG_Pin (Hi-Z, no pull) */
-  GPIO_InitStruct.Pin = EXT_WDG_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin VBAT_MEAS_EN_Pin SPI2_CS_Pin
-                           MDM_EN_PRE_Pin LED_MB_Pin MDM_RST_Pin */
-  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|VBAT_MEAS_EN_Pin|SPI2_CS_Pin
-                          |MDM_EN_PRE_Pin|LED_MB_Pin|MDM_RST_Pin;
+  /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin SPI2_CS_Pin MDM_EN_PRE_Pin
+                           VBAT_MEAS_EN_Pin LED_MB_Pin MDM_RST_Pin */
+  GPIO_InitStruct.Pin = AHT20_EN_Pin|SENS_EN_Pin|SPI2_CS_Pin|MDM_EN_PRE_Pin
+                          |VBAT_MEAS_EN_Pin|LED_MB_Pin|MDM_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1158,10 +1152,14 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_task_default */
 void task_default(void *argument)
 {
+  /* init code for USB_DEVICE */
+  MX_USB_DEVICE_Init();
+  /* USER CODE BEGIN 5 */
   uint32_t sync_sec = 0;
   TickType_t wake = xTaskGetTickCount();
   EventBits_t bits;
 
+  /* Infinite loop */
   for(;;)
   {
     vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000));
@@ -1189,6 +1187,7 @@ void task_default(void *argument)
 
     xEventGroupSetBits(sync_events, bits);
   }
+  /* USER CODE END 5 */
 }
 
 /**
