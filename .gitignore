@@ -4,3 +4,6 @@ Core/Inc/gitcommit.h
 umeter\ Debug.launch
 
 .github
+
+.idea/
+cmake-build-*/
