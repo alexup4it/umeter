@@ -31,30 +31,15 @@ static const uint8_t cmd_init[] = {0xBE, 0x08, 0x00};
 static const uint8_t cmd_meas[] = {0xAC, 0x33, 0x00};
 
 
-inline static void power_off(struct aht20 *sen)
-{
-	HAL_I2C_DeInit(sen->i2c);
-	HAL_GPIO_WritePin(sen->pwr_port, sen->pwr_pin, GPIO_PIN_RESET);
-}
-
-inline static void power_on(struct aht20 *sen)
-{
-	HAL_GPIO_WritePin(sen->pwr_port, sen->pwr_pin, GPIO_PIN_SET);
-	osDelay(100); // 40
-	sen->hw_init();
-}
-
-/******************************************************************************/
 void aht20_init(struct aht20 *sen, I2C_HandleTypeDef *i2c,
-		aht20_hw_init hw_init, GPIO_TypeDef *pwr_port, uint16_t pwr_pin)
+				aht20_power_cb power_on, aht20_power_cb power_off)
 {
 	memset(sen, 0, sizeof(*sen));
 	sen->i2c = i2c;
-	sen->hw_init = hw_init;
-	sen->pwr_port = pwr_port;
-	sen->pwr_pin = pwr_pin;
+	sen->power_on = power_on;
+	sen->power_off = power_off;
 
-	power_off(sen);
+	sen->power_off();
 }
 
 /******************************************************************************/
@@ -63,11 +48,11 @@ int aht20_is_available(struct aht20 *sen)
 	HAL_StatusTypeDef status;
 	uint8_t buf;
 
-	power_on(sen);
+	sen->power_on();
 
 	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_CMD_STATUS,
 			I2C_MEMADD_SIZE_8BIT, &buf, 1, I2C_TIMEOUT);
-	power_off(sen);
+	sen->power_off();
 
 	if (status != HAL_OK)
 		return -1;
@@ -102,14 +87,14 @@ int aht20_read(struct aht20 *sen, int32_t *temp, int32_t *hum)
 	uint32_t raw_hum;
 	uint8_t buf[7];
 
-	power_on(sen);
+	sen->power_on();
 
 	/* Status */
 	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_CMD_STATUS,
 			I2C_MEMADD_SIZE_8BIT, buf, 1, I2C_TIMEOUT);
 	if (status != HAL_OK)
 	{
-		power_off(sen);
+		sen->power_off();
 		return -1;
 	}
 	
@@ -120,7 +105,7 @@ int aht20_read(struct aht20 *sen, int32_t *temp, int32_t *hum)
 				(uint8_t *) cmd_init, sizeof(cmd_init), I2C_TIMEOUT);
 		if (status != HAL_OK)
 		{
-			power_off(sen);
+			sen->power_off();
 			return -1;
 		}
 		osDelay(10);
@@ -131,7 +116,7 @@ int aht20_read(struct aht20 *sen, int32_t *temp, int32_t *hum)
 			(uint8_t *) cmd_meas, sizeof(cmd_meas), I2C_TIMEOUT);
 	if (status != HAL_OK)
 	{
-		power_off(sen);
+		sen->power_off();
 		return -1;
 	}
 	osDelay(100); /* "Wait for 80ms for the measurement to be completed" */
@@ -139,7 +124,7 @@ int aht20_read(struct aht20 *sen, int32_t *temp, int32_t *hum)
 	/* Receive data */
 	status = HAL_I2C_Master_Receive(sen->i2c, I2C_ADDRESS, buf, sizeof(buf),
 			I2C_TIMEOUT);
-	power_off(sen);
+	sen->power_off();
 	if (status != HAL_OK)
 		return -1;
 

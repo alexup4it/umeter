@@ -13,12 +13,13 @@
 
 
 /******************************************************************************/
-void counter_init(struct counter *cnt, GPIO_TypeDef *pwr_port, uint16_t pwr_pin)
+void counter_init(struct counter *cnt, counter_power_cb power_on,
+				  counter_power_cb power_off)
 {
 	memset(cnt, 0, sizeof(*cnt));
 	cnt->count = 0;
-	cnt->pwr_port = pwr_port;
-	cnt->pwr_pin = pwr_pin;
+	cnt->power_on = power_on;
+	cnt->power_off = power_off;
 
 	cnt->last_tick = 0;
 	cnt->period_sum = 0;
@@ -52,13 +53,13 @@ void counter_irq(struct counter *cnt)
 /******************************************************************************/
 void counter_power_on(struct counter *cnt)
 {
-	HAL_GPIO_WritePin(cnt->pwr_port, cnt->pwr_pin, GPIO_PIN_SET);
+	cnt->power_on();
 }
 
 /******************************************************************************/
 void counter_power_off(struct counter *cnt)
 {
-	HAL_GPIO_WritePin(cnt->pwr_port, cnt->pwr_pin, GPIO_PIN_RESET);
+	cnt->power_off();
 }
 
 /******************************************************************************/

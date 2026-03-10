@@ -63,33 +63,16 @@ inline static void task_done(struct sim800l *mod)
 	mod->task.issue = ISSUE_IDLE;
 }
 
-inline static void reset_set(struct sim800l *mod)
-{
-	HAL_GPIO_WritePin(mod->rst_port, mod->rst_pin, GPIO_PIN_RESET);
-}
-
-inline static void reset_unset(struct sim800l *mod)
-{
-	HAL_GPIO_WritePin(mod->rst_port, mod->rst_pin, GPIO_PIN_SET);
-}
 
 /******************************************************************************/
 void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		sim800l_hw_init hw_init,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin,
-		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
-		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
-		char *apn)
+				  sim800l_power_cb power_on, sim800l_power_cb power_off,
+				  char *apn)
 {
 	memset(mod, 0, sizeof(*mod));
 	mod->uart = uart;
-	mod->hw_init = hw_init;
-	mod->rst_port = rst_port;
-	mod->rst_pin = rst_pin;
-	mod->pwr_port = pwr_port;
-	mod->pwr_pin = pwr_pin;
-	mod->pwr_pre_port = pwr_pre_port;
-	mod->pwr_pre_pin = pwr_pre_pin;
+	mod->power_on = power_on;
+	mod->power_off = power_off;
 	mod->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
 	mod->queue = xQueueCreate(SIM800L_TASK_QUEUE_SIZE,
 			sizeof(struct sim800l_task));
@@ -97,8 +80,7 @@ void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
 	strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
 	mod->apn[sizeof(mod->apn) - 1] = '\0';
 
-	reset_set(mod); /* Hold in reset while powered off */
-	sim800l_power_off(mod);
+	mod->power_off();
 	task_done(mod);
 }
 
@@ -107,38 +89,6 @@ void sim800l_irq(struct sim800l *mod, const char *buf, size_t len)
 {
 	BaseType_t woken = pdFALSE;
 	xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
-}
-
-/******************************************************************************/
-void sim800l_power_on(struct sim800l *mod)
-{
-	/* Hold RST low during power-up */
-	reset_set(mod);
-
-	/* 2-stage power enable: pre-charge cap through 120 Ohm, then full */
-	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_SET);
-	osDelay(200); /* Charge 100uF through 120 Ohm (~60ms for 5*tau) */
-	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_SET);
-	osDelay(100);
-
-	/* Reinitialize UART + start DMA RX (pins back to AF mode) */
-	mod->hw_init();
-
-	/* Release RST - module starts booting */
-	reset_unset(mod);
-	osDelay(3000); /* Wait for SIM800L boot */
-}
-
-/******************************************************************************/
-void sim800l_power_off(struct sim800l *mod)
-{
-	reset_set(mod); /* Hold in reset */
-
-	/* Deinit UART to release pins (no parasitic power via TX/RX) */
-	HAL_UART_DeInit(mod->uart);
-
-	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_RESET);
 }
 
 inline static void clear_rx_buffer(struct sim800l *mod)
@@ -713,7 +663,7 @@ void sim800l_task(struct sim800l *mod)
 		switch ((enum state) mod->state)
 		{
 		case STATE_STARTUP:
-			sim800l_power_on(mod);
+			mod->power_on();
 			mod->errors = 0;
 			state(mod, STATE_AT, STATUS_OK);
 			break;
@@ -767,7 +717,7 @@ void sim800l_task(struct sim800l *mod)
 #ifdef LOGGER
 					logger_add_str(&logger, TAG, false, "power off...");
 #endif
-					sim800l_power_off(mod);
+					mod->power_off();
 					xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
 					mod->task_ticks = xTaskGetTickCount();
 					state(mod, STATE_STARTUP, STATUS_OK);

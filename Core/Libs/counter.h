@@ -8,8 +8,6 @@
 #ifndef COUNTER_H_
 #define COUNTER_H_
 
-#include "stm32f4xx_hal.h"
-
 #include "cmsis_os.h"
 #include "semphr.h"
 
@@ -21,6 +19,8 @@
 /* Speed = COUNTER_SPEED_SCALE / period_avg_ms */
 #define COUNTER_SPEED_SCALE 10000
 
+typedef void (*counter_power_cb)(void);
+
 struct counter_accum
 {
 	uint32_t avg;
@@ -31,8 +31,8 @@ struct counter_accum
 struct counter
 {
 	volatile uint32_t count;
-	GPIO_TypeDef *pwr_port;
-	uint16_t pwr_pin;
+	counter_power_cb power_on;
+	counter_power_cb power_off;
 
 	/* Period tracking (filled in IRQ) */
 	volatile uint32_t last_tick;
@@ -48,8 +48,8 @@ struct counter
 };
 
 
-void counter_init(struct counter *cnt, GPIO_TypeDef *pwr_port,
-		uint16_t pwr_pin);
+void counter_init(struct counter *cnt, counter_power_cb power_on,
+				  counter_power_cb power_off);
 void counter_irq(struct counter *cnt);
 void counter_power_on(struct counter *cnt);
 void counter_power_off(struct counter *cnt);

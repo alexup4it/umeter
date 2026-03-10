@@ -25,30 +25,16 @@
 #define COEFF_2 4095
 
 
-inline static void power_off(struct as5600 *sen)
-{
-	HAL_I2C_DeInit(sen->i2c);
-	HAL_GPIO_WritePin(sen->pwr_port, sen->pwr_pin, GPIO_PIN_RESET);
-}
-
-inline static void power_on(struct as5600 *sen)
-{
-	HAL_GPIO_WritePin(sen->pwr_port, sen->pwr_pin, GPIO_PIN_SET);
-	osDelay(20); // 10
-	sen->hw_init();
-}
-
 /******************************************************************************/
 void as5600_init(struct as5600 *sen, I2C_HandleTypeDef *i2c,
-		as5600_hw_init hw_init, GPIO_TypeDef *pwr_port, uint16_t pwr_pin)
+				 as5600_power_cb power_on, as5600_power_cb power_off)
 {
 	memset(sen, 0, sizeof(*sen));
 	sen->i2c = i2c;
-	sen->hw_init = hw_init;
-	sen->pwr_port = pwr_port;
-	sen->pwr_pin = pwr_pin;
+	sen->power_on = power_on;
+	sen->power_off = power_off;
 
-	power_off(sen);
+	sen->power_off();
 }
 
 static int get_status(struct as5600 *sen)
@@ -56,11 +42,11 @@ static int get_status(struct as5600 *sen)
 	HAL_StatusTypeDef status;
 	uint8_t buf;
 
-	power_on(sen);
+	sen->power_on();
 
 	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_REG_STATUS,
 			I2C_MEMADD_SIZE_8BIT, &buf, 1, I2C_TIMEOUT);
-	power_off(sen);
+	sen->power_off();
 
 	if (status != HAL_OK)
 		return -1;
@@ -88,12 +74,12 @@ int32_t as5600_read(struct as5600 *sen)
 	uint8_t buf[2];
 	int32_t angle;
 
-	power_on(sen);
+	sen->power_on();
 
 	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_REG_ANGLE_HIGH,
 			I2C_MEMADD_SIZE_8BIT, buf, 2, I2C_TIMEOUT);
-	power_off(sen);
-	
+	sen->power_off();
+
 	if (status != HAL_OK)
 		return -1;
 

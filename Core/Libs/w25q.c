@@ -127,28 +127,30 @@ static void release_power_down(struct w25q *mem)
 
 /******************************************************************************/
 void w25q_init(struct w25q *mem, SPI_HandleTypeDef *spi, GPIO_TypeDef *cs_port,
-		uint16_t cs_pin)
+			   uint16_t cs_pin, w25q_hw_cb hw_init_cb, w25q_hw_cb hw_deinit_cb)
 {
 	memset(mem, 0, sizeof(*mem));
 	mem->spi = spi;
 	mem->cs_port = cs_port;
 	mem->cs_pin = cs_pin;
+	mem->hw_init_cb = hw_init_cb;
+	mem->hw_deinit_cb = hw_deinit_cb;
 }
 
 /******************************************************************************/
-void w25q_hw_init(struct w25q *mem)
+void w25q_power_down(struct w25q *mem)
 {
-	// TODO: Turn ON SPI + CS GPIO
-	// main_spi1_init();
+	if (mem->hw_init_cb)
+		mem->hw_init_cb();
 	release_power_down(mem);
 }
 
 /******************************************************************************/
-void w25q_hw_deinit(struct w25q *mem)
+void w25q_power_on(struct w25q *mem)
 {
 	power_down(mem);
-	// TODO: Turn OFF SPI + CS GPIO
-	// HAL_SPI_DeInit(mem->spi);
+	if (mem->hw_deinit_cb)
+		mem->hw_deinit_cb();
 }
 
 /******************************************************************************/

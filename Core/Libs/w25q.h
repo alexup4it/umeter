@@ -13,19 +13,23 @@
 #define W25Q_PAGE_SIZE   256
 #define W25Q_SECTOR_SIZE 4096
 
+typedef void (*w25q_hw_cb)(void);
+
 struct w25q
 {
 	SPI_HandleTypeDef *spi;
 	GPIO_TypeDef *cs_port;
 	uint16_t cs_pin;
+	w25q_hw_cb hw_init_cb;
+	w25q_hw_cb hw_deinit_cb;
 };
 
 
 void w25q_init(struct w25q *mem, SPI_HandleTypeDef *spi, GPIO_TypeDef *cs_port,
-		uint16_t cs_pin);
+			   uint16_t cs_pin, w25q_hw_cb hw_init_cb, w25q_hw_cb hw_deinit_cb);
 
-void w25q_hw_init(struct w25q *mem);
-void w25q_hw_deinit(struct w25q *mem);
+void w25q_power_down(struct w25q *mem);
+void w25q_power_on(struct w25q *mem);
 
 void w25q_sector_erase(struct w25q *mem, uint32_t address);
 void w25q_block_erase(struct w25q *mem, uint32_t address);

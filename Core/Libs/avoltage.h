@@ -13,18 +13,20 @@
 #include "cmsis_os.h"
 #include "semphr.h"
 
+typedef void (*avoltage_power_cb)(void);
+
 struct avoltage
 {
 	SemaphoreHandle_t mutex;
 	ADC_HandleTypeDef *adc;
 	int ratio;
-	GPIO_TypeDef *en_port;
-	uint16_t en_pin;
+	avoltage_power_cb power_on;
+	avoltage_power_cb power_off;
 };
 
 
 void avoltage_init(struct avoltage *avlt, ADC_HandleTypeDef *adc, int ratio,
-		GPIO_TypeDef *en_port, uint16_t en_pin);
+				   avoltage_power_cb power_on, avoltage_power_cb power_off);
 int avoltage_calib(struct avoltage *avlt);
 int avoltage(struct avoltage *avlt);
 

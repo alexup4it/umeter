@@ -10,14 +10,13 @@
 
 #include "stm32f4xx_hal.h"
 
-typedef void (*as5600_hw_init)(void);
+typedef void (*as5600_power_cb)(void);
 
 struct as5600
 {
 	I2C_HandleTypeDef *i2c;
-	as5600_hw_init hw_init;
-	GPIO_TypeDef *pwr_port;
-	uint16_t pwr_pin;
+	as5600_power_cb power_on;
+	as5600_power_cb power_off;
 };
 
 enum as5600_status
@@ -29,7 +28,7 @@ enum as5600_status
 
 
 void as5600_init(struct as5600 *sen, I2C_HandleTypeDef *i2c,
-		as5600_hw_init hw_init, GPIO_TypeDef *pwr_port, uint16_t pwr_pin);
+				 as5600_power_cb power_on, as5600_power_cb power_off);
 int as5600_is_available(struct as5600 *sen);
 int as5600_status(struct as5600 *sen);
 int32_t as5600_read(struct as5600 *sen);

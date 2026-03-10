@@ -23,11 +23,12 @@ struct w25q_s
 };
 
 
-inline static void w25q_s_init(struct w25q_s *smem,
-		SPI_HandleTypeDef *spi, GPIO_TypeDef *cs_port, uint16_t cs_pin)
+inline static void w25q_s_init(struct w25q_s *smem, SPI_HandleTypeDef *spi,
+							   GPIO_TypeDef *cs_port, uint16_t cs_pin,
+							   w25q_hw_cb hw_init_cb, w25q_hw_cb hw_deinit_cb)
 {
 	smem->mutex = xSemaphoreCreateMutex();
-	w25q_init(&smem->mem, spi,cs_port, cs_pin);
+	w25q_init(&smem->mem, spi, cs_port, cs_pin, hw_init_cb, hw_deinit_cb);
 }
 
 inline static void w25q_s_sector_erase(struct w25q_s *smem,

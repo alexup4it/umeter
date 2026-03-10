@@ -222,10 +222,92 @@ void btn_callback(void)
 	task_sensors_notify(&sens);
 }
 
-void sim800l_hw_init_cb(void)
+static void sim800l_power_on_cb(void)
 {
+	/* Hold RST low during power-up */
+	HAL_GPIO_WritePin(MDM_RST_GPIO_Port, MDM_RST_Pin, GPIO_PIN_RESET);
+
+	/* 2-stage power enable: pre-charge cap through 120 Ohm, then full */
+	HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_SET);
+	osDelay(200); /* Charge 100uF through 120 Ohm (~60ms for 5*tau) */
+	HAL_GPIO_WritePin(MDM_EN_GPIO_Port, MDM_EN_Pin, GPIO_PIN_SET);
+	osDelay(100);
+
+	/* Reinitialize UART + start DMA RX (pins back to AF mode) */
 	MX_USART2_UART_Init();
 	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, ub_mod, UART_BUFFER_SIZE);
+
+	/* Release RST — module starts booting */
+	HAL_GPIO_WritePin(MDM_RST_GPIO_Port, MDM_RST_Pin, GPIO_PIN_SET);
+	osDelay(3000); /* Wait for SIM800L boot */
+}
+
+static void sim800l_power_off_cb(void)
+{
+	/* Hold RST low before cutting power */
+	HAL_GPIO_WritePin(MDM_RST_GPIO_Port, MDM_RST_Pin, GPIO_PIN_RESET);
+
+	/* Deinit UART to release pins (no parasitic power via TX/RX) */
+	HAL_UART_DeInit(&huart2);
+
+	HAL_GPIO_WritePin(MDM_EN_GPIO_Port, MDM_EN_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_RESET);
+}
+
+static void as5600_power_on_cb(void)
+{
+	HAL_GPIO_WritePin(SENS_EN_GPIO_Port, SENS_EN_Pin, GPIO_PIN_SET);
+	osDelay(20);
+	MX_I2C1_Init();
+}
+
+static void as5600_power_off_cb(void)
+{
+	HAL_I2C_DeInit(&hi2c1);
+	HAL_GPIO_WritePin(SENS_EN_GPIO_Port, SENS_EN_Pin, GPIO_PIN_RESET);
+}
+
+static void aht20_power_on_cb(void)
+{
+	HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_SET);
+	osDelay(100);
+	MX_I2C2_Init();
+}
+
+static void aht20_power_off_cb(void)
+{
+	HAL_I2C_DeInit(&hi2c2);
+	HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_RESET);
+}
+
+static void counter_power_on_cb(void)
+{
+	HAL_GPIO_WritePin(HALL_EN_GPIO_Port, HALL_EN_Pin, GPIO_PIN_SET);
+}
+
+static void counter_power_off_cb(void)
+{
+	HAL_GPIO_WritePin(HALL_EN_GPIO_Port, HALL_EN_Pin, GPIO_PIN_RESET);
+}
+
+static void avoltage_power_on_cb(void)
+{
+	HAL_GPIO_WritePin(VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin, GPIO_PIN_SET);
+}
+
+static void avoltage_power_off_cb(void)
+{
+	HAL_GPIO_WritePin(VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin, GPIO_PIN_RESET);
+}
+
+static void w25q_hw_init_cb(void)
+{
+	MX_SPI2_Init();
+}
+
+static void w25q_hw_deinit_cb(void)
+{
+	HAL_SPI_DeInit(&hspi2);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -370,50 +452,13 @@ void RTC_WKUP_IRQHandler(void)
  */
 static void gpio_enter_stop(void)
 {
-	GPIO_InitTypeDef g = {0};
-	g.Mode  = GPIO_MODE_ANALOG;
-	g.Pull  = GPIO_NOPULL;
-	g.Speed = GPIO_SPEED_FREQ_LOW;
-
 	/* --- W25Q flash: deep power-down BEFORE disabling SPI2 ---
 	 * Reduces flash standby from ~25 µA to ~1 µA.
 	 * SPI2 must still be functional at this point. */
-	w25q_hw_deinit(&mem.mem);
-
-	/* --- SPI2 bus (PB13-SCK, PB14-MISO, PB15-MOSI) ---
-	 * Left in AF_PP after MX_SPI2_Init → leaks into W25Q flash.
-	 * CS (PB12) stays high (output) to keep flash deselected. */
-	g.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
-	HAL_GPIO_Init(GPIOB, &g);
-
-	/* --- I2C1 (PB6-SCL, PB7-SDA) ---
-	 * DeInit leaves them floating; external pull-ups → ~0.7 mA each. */
-	g.Pin = GPIO_PIN_6 | GPIO_PIN_7;
-	HAL_GPIO_Init(GPIOB, &g);
-
-	/* --- I2C2 (PB10-SCL, PB3-SDA) ---
-	 * Same pull-up issue. */
-	g.Pin = GPIO_PIN_3 | GPIO_PIN_10;
-	HAL_GPIO_Init(GPIOB, &g);
-
-	/* --- USART2 (PA2-TX, PA3-RX) --- already DeInit when modem off,
-	 * but HAL_GPIO_DeInit only resets to input-float → set analog. */
-	g.Pin = GPIO_PIN_2 | GPIO_PIN_3;
-	HAL_GPIO_Init(GPIOA, &g);
-
-	/* --- EXTI0 Hall sensor input (PA0) --- already masked in EXTI,
-	 * but the pin itself as input-float picks up noise → analog. */
-	g.Pin = GPIO_PIN_0;
-	HAL_GPIO_Init(GPIOA, &g);
-
-	/* --- ADC1: disable peripheral to cut analog bias current --- */
-	__HAL_RCC_ADC1_CLK_DISABLE();
+	w25q_power_on(&mem.mem);
 
 	/* --- Disable DMA1 clock (no active transfers during Stop) --- */
 	__HAL_RCC_DMA1_CLK_DISABLE();
-
-	/* --- Disable SPI2 clock --- */
-	__HAL_RCC_SPI2_CLK_DISABLE();
 
 	/* --- Disable GPIOH clock (only HSE pins, unused in Stop) --- */
 	__HAL_RCC_GPIOH_CLK_DISABLE();
@@ -425,34 +470,12 @@ static void gpio_enter_stop(void)
  */
 static void gpio_exit_stop(void)
 {
-	GPIO_InitTypeDef g = {0};
-
 	/* Re-enable port clocks that were disabled */
-	__HAL_RCC_GPIOH_CLK_ENABLE();
 	__HAL_RCC_DMA1_CLK_ENABLE();
-	__HAL_RCC_SPI2_CLK_ENABLE();
 	__HAL_RCC_ADC1_CLK_ENABLE();
 
-	/* --- Restore SPI2 pins to AF5 --- */
-	g.Pin       = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
-	g.Mode      = GPIO_MODE_AF_PP;
-	g.Pull      = GPIO_NOPULL;
-	g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
-	g.Alternate = GPIO_AF5_SPI2;
-	HAL_GPIO_Init(GPIOB, &g);
-
 	/* --- W25Q flash: release deep power-down AFTER SPI2 is restored --- */
-	w25q_hw_init(&mem.mem);
-
-	/* --- Restore EXTI0 (Hall sensor) as falling-edge interrupt --- */
-	g.Pin  = GPIO_PIN_0;
-	g.Mode = GPIO_MODE_IT_FALLING;
-	g.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &g);
-
-	/* I2C1/I2C2 and USART2 pins are restored lazily by their hw_init
-	 * callbacks (as5600, aht20, sim800l) when the peripheral is
-	 * actually needed — no need to restore here. */
+	w25q_power_down(&mem.mem);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -611,16 +634,9 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_SPI2_Init();
   MX_ADC1_Init();
-  MX_I2C1_Init();
-  MX_I2C2_Init();
   MX_IWDG_Init();
-  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
-  // Deinitialization
-  HAL_I2C_DeInit(&hi2c2);
 
   //
   //DWT_cnt_init();
@@ -648,19 +664,16 @@ int main(void)
 #ifdef LOGGER
   logger_init(&logger, &siface);
 #endif
-  w25q_s_init(&mem, &hspi2, SPI2_CS_GPIO_Port, SPI2_CS_Pin);
-  sim800l_init(&mod, &huart2, sim800l_hw_init_cb,
-		  MDM_RST_GPIO_Port, MDM_RST_Pin,
-		  MDM_EN_GPIO_Port, MDM_EN_Pin,
-		  MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin,
+  w25q_s_init(&mem, &hspi2, SPI2_CS_GPIO_Port, SPI2_CS_Pin,
+		  w25q_hw_init_cb, w25q_hw_deinit_cb);
+  sim800l_init(&mod, &huart2,
+		  sim800l_power_on_cb, sim800l_power_off_cb,
 		  params.apn);
   ota_init(&ota, &mod, &mem, params.secret, params.url_ota);
-  as5600_init(&pot, &hi2c1, MX_I2C1_Init, SENS_EN_GPIO_Port,
-		  SENS_EN_Pin /* 0x6C */);
-  aht20_init(&aht, &hi2c2, MX_I2C2_Init, AHT20_EN_GPIO_Port,
-		  AHT20_EN_Pin /* 0x70 */);
-  counter_init(&cnt, HALL_EN_GPIO_Port, HALL_EN_Pin);
-  avoltage_init(&avlt, &hadc1, 2, VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin);
+  as5600_init(&pot, &hi2c1, as5600_power_on_cb, as5600_power_off_cb);
+  aht20_init(&aht, &hi2c2, aht20_power_on_cb, aht20_power_off_cb);
+  counter_init(&cnt, counter_power_on_cb, counter_power_off_cb);
+  avoltage_init(&avlt, &hadc1, 2, avoltage_power_on_cb, avoltage_power_off_cb);
 
   //
   mqueue_init(&mem);
@@ -1106,11 +1119,23 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_DB_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : PC14 PC15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
   /*Configure GPIO pin : EXTI0_HALL_Pin */
   GPIO_InitStruct.Pin = EXTI0_HALL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA1 PA5 PA6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_5|GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : BTN_MB_Pin CHRG_OK_Pin CHRG_STAT_Pin */
   GPIO_InitStruct.Pin = BTN_MB_Pin|CHRG_OK_Pin|CHRG_STAT_Pin;

@@ -21,17 +21,17 @@
 
 /******************************************************************************/
 void avoltage_init(struct avoltage *avlt, ADC_HandleTypeDef *adc, int ratio,
-		GPIO_TypeDef *en_port, uint16_t en_pin)
+				   avoltage_power_cb power_on, avoltage_power_cb power_off)
 {
 	memset(avlt, 0, sizeof(*avlt));
 	avlt->adc = adc;
 	avlt->ratio = ratio;
-	avlt->en_port = en_port;
-	avlt->en_pin = en_pin;
+	avlt->power_on = power_on;
+	avlt->power_off = power_off;
 	avlt->mutex = xSemaphoreCreateMutex();
 
 	/* Start with divider off */
-	HAL_GPIO_WritePin(avlt->en_port, avlt->en_pin, GPIO_PIN_RESET);
+	avlt->power_off();
 }
 
 /******************************************************************************/
@@ -59,19 +59,21 @@ int avoltage(struct avoltage *avlt)
 	xSemaphoreTake(avlt->mutex, portMAX_DELAY);
 
 	/* Enable voltage divider */
-	HAL_GPIO_WritePin(avlt->en_port, avlt->en_pin, GPIO_PIN_SET);
+	avlt->power_on();
 	osDelay(MEAS_SETTLE_MS);
 
 	status = HAL_ADC_Start(avlt->adc);
-	if (status != HAL_OK) {
-		HAL_GPIO_WritePin(avlt->en_port, avlt->en_pin, GPIO_PIN_RESET);
+	if (status != HAL_OK)
+	{
+		avlt->power_off();
 		xSemaphoreGive(avlt->mutex);
 		return -1;
 	}
 
 	status = HAL_ADC_PollForConversion(avlt->adc, ADC_TIMEOUT);
-	if (status != HAL_OK) {
-		HAL_GPIO_WritePin(avlt->en_port, avlt->en_pin, GPIO_PIN_RESET);
+	if (status != HAL_OK)
+	{
+		avlt->power_off();
 		xSemaphoreGive(avlt->mutex);
 		return -1;
 	}
@@ -79,7 +81,7 @@ int avoltage(struct avoltage *avlt)
 	value = HAL_ADC_GetValue(avlt->adc);
 
 	/* Disable voltage divider to eliminate quiescent current */
-	HAL_GPIO_WritePin(avlt->en_port, avlt->en_pin, GPIO_PIN_RESET);
+	avlt->power_off();
 
 	xSemaphoreGive(avlt->mutex);
 

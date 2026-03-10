@@ -58,7 +58,21 @@ extern DMA_HandleTypeDef hdma_usart2_tx;
 /* USER CODE END ExternalFunctions */
 
 /* USER CODE BEGIN 0 */
+static void GPIO_DeInit_Analog(GPIO_TypeDef  *GPIOx, uint32_t GPIO_Pin)
+{
+	/* 1. Call original HAL DeInit to clear EXTI and other settings */
+	(HAL_GPIO_DeInit)(GPIOx, GPIO_Pin);
 
+	/* 2. Set pin to ANALOG mode to minimize power consumption */
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = GPIO_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+/* Override HAL_GPIO_DeInit call within this file */
+#define HAL_GPIO_DeInit GPIO_DeInit_Analog
 /* USER CODE END 0 */
 /**
   * Initializes the Global MSP.
