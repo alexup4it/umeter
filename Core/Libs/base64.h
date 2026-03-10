@@ -13,8 +13,9 @@
 
 #include <stddef.h>
 
-
-void base64_encode(const unsigned char *in, size_t inlen, char *out,
-		size_t *outlen);
+void base64_encode(const unsigned char* in,
+                   size_t inlen,
+                   char* out,
+                   size_t* outlen);
 
 #endif /* BASE64_H_ */

@@ -14,33 +14,39 @@
 
 #define LOGGER
 
-struct logger
-{
-	struct siface *siface;
+struct logger {
+    struct siface* siface;
 };
 
-
-void logger_init(struct logger *logger, struct siface *siface);
+void logger_init(struct logger* logger, struct siface* siface);
 
 #ifdef LOGGER
-int logger_add(struct logger *logger, const char *tag, bool full,
-		const char *buf, size_t len);
+int logger_add(struct logger* logger,
+               const char* tag,
+               bool full,
+               const char* buf,
+               size_t len);
 #else
-inline static int logger_add(struct logger *logger, const char *tag, bool full,
-		const char *buf, size_t len)
-{
-	return 0;
+inline static int logger_add(struct logger* logger,
+                             const char* tag,
+                             bool full,
+                             const char* buf,
+                             size_t len) {
+    return 0;
 }
 #endif
 
 #ifdef LOGGER
-int logger_add_str(struct logger *logger, const char *tag, bool full,
-		const char *buf);
+int logger_add_str(struct logger* logger,
+                   const char* tag,
+                   bool full,
+                   const char* buf);
 #else
-inline static int logger_add_str(struct logger *logger, const char *tag,
-		bool full, const char *buf)
-{
-	return 0;
+inline static int logger_add_str(struct logger* logger,
+                                 const char* tag,
+                                 bool full,
+                                 const char* buf) {
+    return 0;
 }
 #endif
 

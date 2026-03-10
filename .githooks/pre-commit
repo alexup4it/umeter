@@ -1,0 +1,38 @@
+#!/bin/sh
+# pre-commit hook: run clang-format on staged files in Core/
+
+CLANG_FORMAT=$(which clang-format 2>/dev/null)
+if [ -z "$CLANG_FORMAT" ]; then
+    echo "[pre-commit] clang-format not found, skipping format check."
+    exit 0
+fi
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^Core/.*\.(c|h|cpp|hpp)$')
+
+if [ -z "$STAGED_FILES" ]; then
+    exit 0
+fi
+
+NEEDS_FORMAT=0
+
+for FILE in $STAGED_FILES; do
+    FORMATTED=$("$CLANG_FORMAT" --style=file "$FILE")
+    ORIGINAL=$(cat "$FILE")
+    if [ "$FORMATTED" != "$ORIGINAL" ]; then
+        echo "[pre-commit] clang-format: $FILE needs formatting"
+        NEEDS_FORMAT=1
+    fi
+done
+
+if [ "$NEEDS_FORMAT" -eq 1 ]; then
+    echo ""
+    echo "[pre-commit] Some files in Core/ are not formatted."
+    echo "Run the following command to auto-format them:"
+    echo ""
+    echo "  git diff --cached --name-only --diff-filter=ACM | grep -E 'Core/.*\\.(c|h|cpp|hpp)$' | xargs clang-format --style=file -i"
+    echo ""
+    exit 1
+fi
+
+exit 0
+

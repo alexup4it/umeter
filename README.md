@@ -124,3 +124,16 @@ Sensor data structure:
 
 ## Serial API
 **_?_**
+
+## Development setup
+Init submodules:
+```sh
+git submodule init
+git submodule update
+```
+
+Activate git hooks:
+```sh
+sh install-hooks.sh
+```
+

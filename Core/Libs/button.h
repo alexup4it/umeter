@@ -10,19 +10,19 @@
 
 #include "stm32f4xx_hal.h"
 
-struct button
-{
-	GPIO_TypeDef *port;
-	uint16_t pin;
-	int counter;
-	int state;
+struct button {
+    GPIO_TypeDef* port;
+    uint16_t pin;
+    int counter;
+    int state;
 
-	void *callback;
+    void* callback;
 };
 
-
-void button_init(struct button *btn, GPIO_TypeDef *port, uint16_t pin,
-		void *callback);
-void button_task(struct button *btn);
+void button_init(struct button* btn,
+                 GPIO_TypeDef* port,
+                 uint16_t pin,
+                 void* callback);
+void button_task(struct button* btn);
 
 #endif /* BUTTON_H_ */

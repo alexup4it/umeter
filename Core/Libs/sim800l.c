@@ -23,99 +23,95 @@
 
 #include "logger.h"
 #ifdef LOGGER
-#define TAG "SIM800L"
+#    define TAG "SIM800L"
 extern struct logger logger;
 #endif
 
-enum status
-{
-	STATUS_OK,
-	STATUS_ERROR,
+enum status {
+    STATUS_OK,
+    STATUS_ERROR,
 };
 
-enum state
-{
-	STATE_STARTUP,
-	STATE_AT,
-	STATE_ECHO_OFF,
-	STATE_DEL_SMS,
-	STATE_IDLE,
-	STATE_CBC,
-	STATE_CREG,
-	STATE_GPRS_INIT,
-	STATE_GPRS_HTTP,
-	STATE_GPRS_HTTP_TERM,
-	STATE_GPRS_DEINIT,
-	STATE_NETSCAN,
+enum state {
+    STATE_STARTUP,
+    STATE_AT,
+    STATE_ECHO_OFF,
+    STATE_DEL_SMS,
+    STATE_IDLE,
+    STATE_CBC,
+    STATE_CREG,
+    STATE_GPRS_INIT,
+    STATE_GPRS_HTTP,
+    STATE_GPRS_HTTP_TERM,
+    STATE_GPRS_DEINIT,
+    STATE_NETSCAN,
 };
 
-enum issue
-{
-	ISSUE_IDLE,
-	ISSUE_VOLTAGE,
-	ISSUE_HTTP,
-	ISSUE_NETSCAN,
+enum issue {
+    ISSUE_IDLE,
+    ISSUE_VOLTAGE,
+    ISSUE_HTTP,
+    ISSUE_NETSCAN,
 };
 
-
-inline static void task_done(struct sim800l *mod)
-{
-	mod->task.issue = ISSUE_IDLE;
-}
-
-
-/******************************************************************************/
-void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-				  sim800l_power_cb power_on, sim800l_power_cb power_off,
-				  char *apn)
-{
-	memset(mod, 0, sizeof(*mod));
-	mod->uart = uart;
-	mod->power_on = power_on;
-	mod->power_off = power_off;
-	mod->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
-	mod->queue = xQueueCreate(SIM800L_TASK_QUEUE_SIZE,
-			sizeof(struct sim800l_task));
-
-	strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
-	mod->apn[sizeof(mod->apn) - 1] = '\0';
-
-	mod->power_off();
-	task_done(mod);
+inline static void task_done(struct sim800l* mod) {
+    mod->task.issue = ISSUE_IDLE;
 }
 
 /******************************************************************************/
-void sim800l_irq(struct sim800l *mod, const char *buf, size_t len)
-{
-	BaseType_t woken = pdFALSE;
-	xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
+void sim800l_init(struct sim800l* mod,
+                  UART_HandleTypeDef* uart,
+                  sim800l_power_cb power_on,
+                  sim800l_power_cb power_off,
+                  char* apn) {
+    memset(mod, 0, sizeof(*mod));
+    mod->uart      = uart;
+    mod->power_on  = power_on;
+    mod->power_off = power_off;
+    mod->stream    = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
+    mod->queue =
+        xQueueCreate(SIM800L_TASK_QUEUE_SIZE, sizeof(struct sim800l_task));
+
+    strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
+    mod->apn[sizeof(mod->apn) - 1] = '\0';
+
+    mod->power_off();
+    task_done(mod);
 }
 
-inline static void clear_rx_buffer(struct sim800l *mod)
-{
-	xStreamBufferReset(mod->stream);
-	mod->rxlen = 0;
+/******************************************************************************/
+void sim800l_irq(struct sim800l* mod, const char* buf, size_t len) {
+    BaseType_t woken = pdFALSE;
+    xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
 }
 
-static bool wait_for_any(struct sim800l *mod, timeout_t timeout)
-{
-	size_t received;
+inline static void clear_rx_buffer(struct sim800l* mod) {
+    xStreamBufferReset(mod->stream);
+    mod->rxlen = 0;
+}
 
-	if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-		return false;
+static bool wait_for_any(struct sim800l* mod, timeout_t timeout) {
+    size_t received;
 
-	received = xStreamBufferReceive(mod->stream, &mod->rxb[mod->rxlen],
-			SIM800L_BUFFER_SIZE - mod->rxlen, pdMS_TO_TICKS(timeout));
-	mod->rxlen += received;
+    if (mod->rxlen >= SIM800L_BUFFER_SIZE) {
+        return false;
+    }
 
-	if (!received)
-		return false;
+    received = xStreamBufferReceive(mod->stream,
+                                    &mod->rxb[mod->rxlen],
+                                    SIM800L_BUFFER_SIZE - mod->rxlen,
+                                    pdMS_TO_TICKS(timeout));
+    mod->rxlen += received;
+
+    if (!received) {
+        return false;
+    }
 
 #ifdef LOGGER
-	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+    logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
 
-	return true;
+    return true;
 }
 
 /**
@@ -123,44 +119,45 @@ static bool wait_for_any(struct sim800l *mod, timeout_t timeout)
  * Does NOT clear the buffer — caller or next transmit handles that.
  * @return true if substring found within timeout, false on timeout
  */
-static bool wait_for(struct sim800l *mod, const char *substr,
-		timeout_t timeout)
-{
-	TickType_t start = xTaskGetTickCount();
-	TickType_t limit = pdMS_TO_TICKS(timeout);
-	TickType_t elapsed;
-	TickType_t left;
+static bool wait_for(struct sim800l* mod,
+                     const char* substr,
+                     timeout_t timeout) {
+    TickType_t start = xTaskGetTickCount();
+    TickType_t limit = pdMS_TO_TICKS(timeout);
+    TickType_t elapsed;
+    TickType_t left;
 
-	for (;;)
-	{
-		mod->rxb[mod->rxlen] = '\0';
-		if (strstr((char *) mod->rxb, substr))
-		{
+    for (;;) {
+        mod->rxb[mod->rxlen] = '\0';
+        if (strstr((char*)mod->rxb, substr)) {
 #ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
+            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
-			return true;
-		}
+            return true;
+        }
 
-		elapsed = xTaskGetTickCount() - start;
-		if (elapsed >= limit)
-			break;
-		left = limit - elapsed;
+        elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= limit) {
+            break;
+        }
+        left = limit - elapsed;
 
-		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-			break;
+        if (mod->rxlen >= SIM800L_BUFFER_SIZE) {
+            break;
+        }
 
-		mod->rxlen += xStreamBufferReceive(mod->stream,
-				&mod->rxb[mod->rxlen],
-				SIM800L_BUFFER_SIZE - mod->rxlen, left);
-	}
+        mod->rxlen += xStreamBufferReceive(mod->stream,
+                                           &mod->rxb[mod->rxlen],
+                                           SIM800L_BUFFER_SIZE - mod->rxlen,
+                                           left);
+    }
 
 #ifdef LOGGER
-	if (mod->rxlen)
-		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+    if (mod->rxlen) {
+        logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+    }
 #endif
-	return false;
+    return false;
 }
 
 /**
@@ -168,206 +165,209 @@ static bool wait_for(struct sim800l *mod, const char *substr,
  * Does NOT clear the buffer.
  * @return true if OK received, false if ERROR or timeout
  */
-static bool wait_for_ok(struct sim800l *mod, timeout_t timeout)
-{
-	TickType_t start = xTaskGetTickCount();
-	TickType_t limit = pdMS_TO_TICKS(timeout);
-	TickType_t elapsed;
-	TickType_t left;
+static bool wait_for_ok(struct sim800l* mod, timeout_t timeout) {
+    TickType_t start = xTaskGetTickCount();
+    TickType_t limit = pdMS_TO_TICKS(timeout);
+    TickType_t elapsed;
+    TickType_t left;
 
-	for (;;)
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    for (;;) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		if (strstr((char *) mod->rxb, "OK"))
-		{
+        if (strstr((char*)mod->rxb, "OK")) {
 #ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
+            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
-			return true;
-		}
+            return true;
+        }
 
-		if (strstr((char *) mod->rxb, "ERROR"))
-		{
+        if (strstr((char*)mod->rxb, "ERROR")) {
 #ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
+            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
-			return false;
-		}
+            return false;
+        }
 
-		elapsed = xTaskGetTickCount() - start;
-		if (elapsed >= limit)
-			break;
-		left = limit - elapsed;
+        elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= limit) {
+            break;
+        }
+        left = limit - elapsed;
 
-		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-			break;
+        if (mod->rxlen >= SIM800L_BUFFER_SIZE) {
+            break;
+        }
 
-		mod->rxlen += xStreamBufferReceive(mod->stream,
-				&mod->rxb[mod->rxlen],
-				SIM800L_BUFFER_SIZE - mod->rxlen, left);
-	}
+        mod->rxlen += xStreamBufferReceive(mod->stream,
+                                           &mod->rxb[mod->rxlen],
+                                           SIM800L_BUFFER_SIZE - mod->rxlen,
+                                           left);
+    }
 
 #ifdef LOGGER
-	if (mod->rxlen)
-		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
+    if (mod->rxlen) {
+        logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+    }
 #endif
-	return false;
+    return false;
 }
 
-static void transmit_data(struct sim800l *mod, const uint8_t *buf, size_t len)
-{
-	if (len > SIM800L_BUFFER_SIZE)
-		len = SIM800L_BUFFER_SIZE;
+static void transmit_data(struct sim800l* mod, const uint8_t* buf, size_t len) {
+    if (len > SIM800L_BUFFER_SIZE) {
+        len = SIM800L_BUFFER_SIZE;
+    }
 
-	memcpy(mod->txb, buf, len);
+    memcpy(mod->txb, buf, len);
 
-	mod->txb[len] = '\r';
-	mod->txb[len + 1] = '\n';
-	len += 2;
+    mod->txb[len]     = '\r';
+    mod->txb[len + 1] = '\n';
+    len += 2;
 
-	osDelay(20);
+    osDelay(20);
 
 #ifdef LOGGER
-	logger_add(&logger, TAG, false, (char *) mod->txb, len);
+    logger_add(&logger, TAG, false, (char*)mod->txb, len);
 #endif
 
-	clear_rx_buffer(mod);
-	while (HAL_UART_Transmit_DMA(mod->uart, mod->txb, len) == HAL_BUSY);
+    clear_rx_buffer(mod);
+    while (HAL_UART_Transmit_DMA(mod->uart, mod->txb, len) == HAL_BUSY)
+        ;
 }
 
-inline static void transmit(struct sim800l *mod, const char *buf)
-{
-	transmit_data(mod, (const uint8_t *) buf, strlen(buf));
+inline static void transmit(struct sim800l* mod, const char* buf) {
+    transmit_data(mod, (const uint8_t*)buf, strlen(buf));
 }
 
 /**
  * Send AT command and wait for OK or ERROR.
  * @return true if OK, false if ERROR or timeout
  */
-static bool send_cmd(struct sim800l *mod, const char *cmd, timeout_t timeout)
-{
-	transmit(mod, cmd);
-	return wait_for_ok(mod, timeout);
+static bool send_cmd(struct sim800l* mod, const char* cmd, timeout_t timeout) {
+    transmit(mod, cmd);
+    return wait_for_ok(mod, timeout);
 }
 
-static void state(struct sim800l *mod, enum state new_state, enum status status)
-{
-	mod->state = new_state;
+static void state(struct sim800l* mod,
+                  enum state new_state,
+                  enum status status) {
+    mod->state = new_state;
 
-	if (status != STATUS_OK)
-	{
-		mod->errors++;
-		if (mod->errors >= MAX_ERRORS)
-		{
-			mod->errors = 0;
-			mod->state = STATE_STARTUP;
-		}
-	}
+    if (status != STATUS_OK) {
+        mod->errors++;
+        if (mod->errors >= MAX_ERRORS) {
+            mod->errors = 0;
+            mod->state  = STATE_STARTUP;
+        }
+    }
 
-	// Task timeout
-	if (mod->task.issue != ISSUE_IDLE)
-	{
-		if ((xTaskGetTickCount() - mod->task_ticks) > mod->task.timeout)
-		{
-			mod->task.callback(-1, mod->task.data);
-			task_done(mod);
+    // Task timeout
+    if (mod->task.issue != ISSUE_IDLE) {
+        if ((xTaskGetTickCount() - mod->task_ticks) > mod->task.timeout) {
+            mod->task.callback(-1, mod->task.data);
+            task_done(mod);
 
-			mod->state = STATE_STARTUP;
-		}
-	}
+            mod->state = STATE_STARTUP;
+        }
+    }
 }
 
 // "\r\n+CBC: 0,61,3895\r\n\r\nOK\r\n"
-static bool parse_battery_charge(struct sim800l *mod, timeout_t timeout)
-{
-	const char *header = "+CBC:";
-	const char *ending = "OK";
-	char *p, *end;
+static bool parse_battery_charge(struct sim800l* mod, timeout_t timeout) {
+    const char* header = "+CBC:";
+    const char* ending = "OK";
+    char *p, *end;
 
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
+        p = strstr((char*)mod->rxb, header);
+        if (!p) {
+            continue;
+        }
 
-		end = strstr(p, ending);
-		if (!end)
-			continue;
+        end = strstr(p, ending);
+        if (!end) {
+            continue;
+        }
 
-		p = strstr(p, ",");
-		if (!p)
-			return false;
+        p = strstr(p, ",");
+        if (!p) {
+            return false;
+        }
 
-		p++;
-		if (!*p)
-			return false;
+        p++;
+        if (!*p) {
+            return false;
+        }
 
-		mod->bcl = strtoul(p, &p, 0);
-		if (!*p)
-			return false;
+        mod->bcl = strtoul(p, &p, 0);
+        if (!*p) {
+            return false;
+        }
 
-		p++;
-		if (!*p)
-			return false;
+        p++;
+        if (!*p) {
+            return false;
+        }
 
-		mod->voltage = strtoul(p, NULL, 0);
+        mod->voltage = strtoul(p, NULL, 0);
 
-		return true;
-	}
+        return true;
+    }
 
-	return false;
+    return false;
 }
 
 // "\r\nOK\r\n\r\n+HTTPACTION: 0,200,293\r\n"
 // "\r\nOK\r\n 1,200,16\r\n" ?
 // @retval: HTTP status code on success or -1 on failure
-static int parse_http_action(struct sim800l *mod, int* len, timeout_t timeout)
-{
-	const char *header = "+HTTPACTION:";
-	const char *ending = "\r\n";
-	char *p, *end;
-	int status;
+static int parse_http_action(struct sim800l* mod, int* len, timeout_t timeout) {
+    const char* header = "+HTTPACTION:";
+    const char* ending = "\r\n";
+    char *p, *end;
+    int status;
 
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
+        p = strstr((char*)mod->rxb, header);
+        if (!p) {
+            continue;
+        }
 
-		end = strstr(p, ending);
-		if (!end)
-			continue;
+        end = strstr(p, ending);
+        if (!end) {
+            continue;
+        }
 
-		p = strstr(p, ",");
-		if (!p)
-			return -1;
+        p = strstr(p, ",");
+        if (!p) {
+            return -1;
+        }
 
-		p++;
-		if (!*p)
-			return -1;
+        p++;
+        if (!*p) {
+            return -1;
+        }
 
-		status = strtoul(p, &p, 0);
-		if (!*p)
-			return -1;
+        status = strtoul(p, &p, 0);
+        if (!*p) {
+            return -1;
+        }
 
-		p++;
-		if (!*p)
-			return -1;
+        p++;
+        if (!*p) {
+            return -1;
+        }
 
-		if (len)
-			*len = strtoul(p, NULL, 0);
+        if (len) {
+            *len = strtoul(p, NULL, 0);
+        }
 
-		return status;
-	}
+        return status;
+    }
 
-	return -1;
+    return -1;
 }
 
 // \r\n+HTTPHEAD: 224
@@ -380,634 +380,612 @@ static int parse_http_action(struct sim800l *mod, int* len, timeout_t timeout)
 // \r\nauthorization: 93bsl2iertjhmgypran0jhssj3lxke66shih2qx4hqg=
 // \r\n\r\n\r\nOK\r\n
 // @retval: "Authorization" token length on success or -1 on failure
-static int parse_http_head_auth(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_http *data = mod->task.data;
-	const char *header = "authorization:";
-	const char *ending = "\r\n";
-	char *p, *end;
-	int len;
+static int parse_http_head_auth(struct sim800l* mod, timeout_t timeout) {
+    struct sim800l_http* data = mod->task.data;
+    const char* header        = "authorization:";
+    const char* ending        = "\r\n";
+    char *p, *end;
+    int len;
 
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
+        p = strstr((char*)mod->rxb, header);
+        if (!p) {
+            continue;
+        }
 
-		end = strstr(p, ending);
-		if (!end)
-			continue;
+        end = strstr(p, ending);
+        if (!end) {
+            continue;
+        }
 
-		p = strstr(p, " ");
-		if (!p)
-			return -1;
+        p = strstr(p, " ");
+        if (!p) {
+            return -1;
+        }
 
-		p++;
-		if (!*p)
-			return -1;
+        p++;
+        if (!*p) {
+            return -1;
+        }
 
-		if (p >= end)
-			return -1;
+        if (p >= end) {
+            return -1;
+        }
 
-		len = end - p;
-		data->res_auth = pvPortMalloc(len + 1);
-		if (!data->res_auth)
-			return -1;
+        len            = end - p;
+        data->res_auth = pvPortMalloc(len + 1);
+        if (!data->res_auth) {
+            return -1;
+        }
 
-		memcpy(data->res_auth, p, len);
-		data->res_auth[len] = '\0';
+        memcpy(data->res_auth, p, len);
+        data->res_auth[len] = '\0';
 
-		return len;
-	}
+        return len;
+    }
 
-	return -1;
+    return -1;
 }
 
 // \r\n+HTTPREAD: 293\r\n...\r\nOK\r\n
 // @retval: Payload length on success or -1 on failure
-static int parse_http_read(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_http *data = mod->task.data;
-	const char *header = "+HTTPREAD:";
-	const char *ending = "\r\n"; // To be sure len is valid
-	char *p, *end;
-	int len;
+static int parse_http_read(struct sim800l* mod, timeout_t timeout) {
+    struct sim800l_http* data = mod->task.data;
+    const char* header        = "+HTTPREAD:";
+    const char* ending        = "\r\n";  // To be sure len is valid
+    char *p, *end;
+    int len;
 
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
+        p = strstr((char*)mod->rxb, header);
+        if (!p) {
+            continue;
+        }
 
-		end = strstr(p, ending);
-		if (!end)
-			continue;
+        end = strstr(p, ending);
+        if (!end) {
+            continue;
+        }
 
-		p = strstr(p, " ");
-		if (!p)
-			return -1;
+        p = strstr(p, " ");
+        if (!p) {
+            return -1;
+        }
 
-		p++;
-		if (!*p)
-			return -1;
+        p++;
+        if (!*p) {
+            return -1;
+        }
 
-		len = strtoul(p, &p, 0);
-		if (!*p)
-			return -1;
+        len = strtoul(p, &p, 0);
+        if (!*p) {
+            return -1;
+        }
 
-		p = end + strlen(ending);
-		end = (char *) &mod->rxb[mod->rxlen];
-		if (p > end)
-			continue;
+        p   = end + strlen(ending);
+        end = (char*)&mod->rxb[mod->rxlen];
+        if (p > end) {
+            continue;
+        }
 
-		if ((end - p) < len)
-			continue;
+        if ((end - p) < len) {
+            continue;
+        }
 
-		data->response = pvPortMalloc(len + 1);
-		if (!data->response)
-			return -1;
+        data->response = pvPortMalloc(len + 1);
+        if (!data->response) {
+            return -1;
+        }
 
-		memcpy(data->response, p, len);
-		data->response[len] = '\0';
-		data->rlen = len;
+        memcpy(data->response, p, len);
+        data->response[len] = '\0';
+        data->rlen          = len;
 
-		return len;
-	}
+        return len;
+    }
 
-	return -1;
+    return -1;
 }
 
 // \r\n+HTTPSTATUS: POST,0,0,0\r\n\r\nOK\r\n
 // \r\nOK\r\n\r\n+HTTPSTATUS: GET,0,0,0\r\n\r\nOK\r\n
 // @retval: HTTP status on success or -1 on failure
-static int parse_http_status(struct sim800l *mod, timeout_t timeout)
-{
-	const char *header = "+HTTPSTATUS:";
-	const char *ending = "\r\nOK\r\n";
-	char *p, *end;
-	int status;
+static int parse_http_status(struct sim800l* mod, timeout_t timeout) {
+    const char* header = "+HTTPSTATUS:";
+    const char* ending = "\r\nOK\r\n";
+    char *p, *end;
+    int status;
 
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        mod->rxb[mod->rxlen] = '\0';
 
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
+        p = strstr((char*)mod->rxb, header);
+        if (!p) {
+            continue;
+        }
 
-		end = strstr(p, ending);
-		if (!end)
-			continue;
+        end = strstr(p, ending);
+        if (!end) {
+            continue;
+        }
 
-		p = strstr(p, ",");
-		if (!p)
-			return -1;
+        p = strstr(p, ",");
+        if (!p) {
+            return -1;
+        }
 
-		p++;
-		if (!*p)
-			return -1;
+        p++;
+        if (!*p) {
+            return -1;
+        }
 
-		status = strtoul(p, NULL, 0);
+        status = strtoul(p, NULL, 0);
 
-		return status;
-	}
+        return status;
+    }
 
-	return -1;
+    return -1;
 }
 
-static int32_t get_param_value(const char *line, const char *param, int base)
-{
-	char *p = strstr(line, param);
-	if (!p)
-		return -1;
+static int32_t get_param_value(const char* line, const char* param, int base) {
+    char* p = strstr(line, param);
+    if (!p) {
+        return -1;
+    }
 
-	p += strlen(param);
-	if (!*p)
-		return -1;
+    p += strlen(param);
+    if (!*p) {
+        return -1;
+    }
 
-	p++; // ':'
-	if (!*p)
-		return -1;
+    p++;  // ':'
+    if (!*p) {
+        return -1;
+    }
 
-	return strtoul(p, NULL, base);
+    return strtoul(p, NULL, base);
 }
 
-static void shift_buffer_left(struct sim800l *mod, size_t len)
-{
-	uint8_t *p = mod->rxb + len;
+static void shift_buffer_left(struct sim800l* mod, size_t len) {
+    uint8_t* p = mod->rxb + len;
 
-	for (size_t i = 0; i < mod->rxlen - len; i++)
-		mod->rxb[i] = p[i];
-	mod->rxlen -= len;
+    for (size_t i = 0; i < mod->rxlen - len; i++) {
+        mod->rxb[i] = p[i];
+    }
+    mod->rxlen -= len;
 }
 
-static int parse_net_scan(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_netscan *data = mod->task.data;
-	const char *ending = "OK\r\n";
-	const char *delim = "\r\n";
-	size_t len;
-	char *p;
+static int parse_net_scan(struct sim800l* mod, timeout_t timeout) {
+    struct sim800l_netscan* data = mod->task.data;
+    const char* ending           = "OK\r\n";
+    const char* delim            = "\r\n";
+    size_t len;
+    char* p;
 
-	while (wait_for_any(mod, timeout))
-	{
-		for (;;)
-		{
-			mod->rxb[mod->rxlen] = '\0';
+    while (wait_for_any(mod, timeout)) {
+        for (;;) {
+            mod->rxb[mod->rxlen] = '\0';
 
-			p = strstr((char *) mod->rxb, delim);
-			if (!p)
-				break; /* for */
+            p = strstr((char*)mod->rxb, delim);
+            if (!p) {
+                break; /* for */
+            }
 
-			p += strlen(delim);
-			len = p - (char *) mod->rxb;
+            p += strlen(delim);
+            len = p - (char*)mod->rxb;
 
-			if (!strncmp((char *) mod->rxb, ending, strlen(ending)))
-			{
-				mod->task.callback(SIM800L_NETSCAN_DONE, mod->task.data);
-				return 0;
-			}
+            if (!strncmp((char*)mod->rxb, ending, strlen(ending))) {
+                mod->task.callback(SIM800L_NETSCAN_DONE, mod->task.data);
+                return 0;
+            }
 
-			// "\r\n" only
-			if (len == strlen(delim))
-			{
-				shift_buffer_left(mod, len);
-				continue; /* for */
-			}
+            // "\r\n" only
+            if (len == strlen(delim)) {
+                shift_buffer_left(mod, len);
+                continue; /* for */
+            }
 
-			// Parameters line
-			mod->rxb[len - 1] = '\0';
+            // Parameters line
+            mod->rxb[len - 1] = '\0';
 
-			// Parameters
-			data->mcc = get_param_value((char *) mod->rxb, "MCC", 10);
-			data->mnc = get_param_value((char *) mod->rxb, "MNC", 10);
-			data->lac = get_param_value((char *) mod->rxb, "Lac", 16);
-			data->cid = get_param_value((char *) mod->rxb, "Cellid", 16);
-			data->lev = get_param_value((char *) mod->rxb, "Rxlev", 10);
+            // Parameters
+            data->mcc = get_param_value((char*)mod->rxb, "MCC", 10);
+            data->mnc = get_param_value((char*)mod->rxb, "MNC", 10);
+            data->lac = get_param_value((char*)mod->rxb, "Lac", 16);
+            data->cid = get_param_value((char*)mod->rxb, "Cellid", 16);
+            data->lev = get_param_value((char*)mod->rxb, "Rxlev", 10);
 
-			if (data->mcc >= 0 && data->mnc >= 0 && data->lac >= 0 &&
-					data->cid >= 0 && data->lev >= 0)
-			{
-				data->lev = data->lev - 113;
-				mod->task.callback(0, mod->task.data);
-			}
+            if (data->mcc >= 0 && data->mnc >= 0 && data->lac >= 0 &&
+                data->cid >= 0 && data->lev >= 0) {
+                data->lev = data->lev - 113;
+                mod->task.callback(0, mod->task.data);
+            }
 
-			// <--
-			shift_buffer_left(mod, len);
-		}
-	}
+            // <--
+            shift_buffer_left(mod, len);
+        }
+    }
 
-	return -1;
+    return -1;
 }
 
-inline static void upd_voltage_data(struct sim800l *mod)
-{
-	struct sim800l_voltage *data = mod->task.data;
-	data->voltage = mod->voltage;
+inline static void upd_voltage_data(struct sim800l* mod) {
+    struct sim800l_voltage* data = mod->task.data;
+    data->voltage                = mod->voltage;
 }
 
-inline static char *get_http_url(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->url;
+inline static char* get_http_url(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    return data->url;
 }
 
-static int get_http_method(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	if (!data->request)
-		return 0; /* GET */
-	else
-		return 1; /* POST */
+static int get_http_method(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    if (!data->request) {
+        return 0; /* GET */
+    } else {
+        return 1; /* POST */
+    }
 }
 
-inline static size_t get_http_request_len(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	if (!data->request)
-		return 0;
-	return strlen(data->request);
+inline static size_t get_http_request_len(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    if (!data->request) {
+        return 0;
+    }
+    return strlen(data->request);
 }
 
-inline static char *get_http_request(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->request;
+inline static char* get_http_request(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    return data->request;
 }
 
-inline static char *get_http_req_auth(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->req_auth;
+inline static char* get_http_req_auth(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    return data->req_auth;
 }
 
-inline static bool get_http_res_auth_get(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->res_auth_get;
+inline static bool get_http_res_auth_get(struct sim800l* mod) {
+    struct sim800l_http* data = mod->task.data;
+    return data->res_auth_get;
 }
 
 /******************************************************************************/
-void sim800l_task(struct sim800l *mod)
-{
-	char cmd[CMD_BUFFER_SIZE];
-	TickType_t ticks;
-	bool done;
+void sim800l_task(struct sim800l* mod) {
+    char cmd[CMD_BUFFER_SIZE];
+    TickType_t ticks;
+    bool done;
 
-	for (;;)
-	{
-		switch ((enum state) mod->state)
-		{
-		case STATE_STARTUP:
-			mod->power_on();
-			mod->errors = 0;
-			state(mod, STATE_AT, STATUS_OK);
-			break;
+    for (;;) {
+        switch ((enum state)mod->state) {
+            case STATE_STARTUP:
+                mod->power_on();
+                mod->errors = 0;
+                state(mod, STATE_AT, STATUS_OK);
+                break;
 
-		case STATE_AT:
-			ticks = xTaskGetTickCount();
-			done = false;
+            case STATE_AT:
+                ticks = xTaskGetTickCount();
+                done  = false;
 
-			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(2000))
-			{
-				transmit(mod, "AT");
-				if (wait_for(mod, "OK", 500))
-				{
-					if (strstr((char *) mod->rxb, "AT"))
-						state(mod, STATE_ECHO_OFF, STATUS_OK);
-					else
-						state(mod, STATE_DEL_SMS, STATUS_OK);
-					done = true;
-					break;
-				}
-			}
-			if (!done)
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-			break;
+                while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(2000)) {
+                    transmit(mod, "AT");
+                    if (wait_for(mod, "OK", 500)) {
+                        if (strstr((char*)mod->rxb, "AT")) {
+                            state(mod, STATE_ECHO_OFF, STATUS_OK);
+                        } else {
+                            state(mod, STATE_DEL_SMS, STATUS_OK);
+                        }
+                        done = true;
+                        break;
+                    }
+                }
+                if (!done) {
+                    state(mod, STATE_STARTUP, STATUS_ERROR);
+                }
+                break;
 
-		case STATE_ECHO_OFF:
-			if (!send_cmd(mod, "ATE0", 500) ||
-					!send_cmd(mod, "AT&W", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-			state(mod, STATE_DEL_SMS, STATUS_OK);
-			break;
+            case STATE_ECHO_OFF:
+                if (!send_cmd(mod, "ATE0", 500) ||
+                    !send_cmd(mod, "AT&W", 500)) {
+                    state(mod, STATE_STARTUP, STATUS_ERROR);
+                    break;
+                }
+                state(mod, STATE_DEL_SMS, STATUS_OK);
+                break;
 
-		case STATE_DEL_SMS:
-			send_cmd(mod, "AT+CMGDA=6", 5000);
-			state(mod, STATE_IDLE, STATUS_OK);
-			break;
+            case STATE_DEL_SMS:
+                send_cmd(mod, "AT+CMGDA=6", 5000);
+                state(mod, STATE_IDLE, STATUS_OK);
+                break;
 
-		case STATE_IDLE:
-			if (mod->task.issue == ISSUE_IDLE)
-			{
-				if (uxQueueMessagesWaiting(mod->queue))
-				{
-					xQueueReceive(mod->queue, &mod->task, 0);
-					mod->task_ticks = xTaskGetTickCount();
-				}
-				else
-				{
+            case STATE_IDLE:
+                if (mod->task.issue == ISSUE_IDLE) {
+                    if (uxQueueMessagesWaiting(mod->queue)) {
+                        xQueueReceive(mod->queue, &mod->task, 0);
+                        mod->task_ticks = xTaskGetTickCount();
+                    } else {
 #ifdef LOGGER
-					logger_add_str(&logger, TAG, false, "power off...");
+                        logger_add_str(&logger, TAG, false, "power off...");
 #endif
-					mod->power_off();
-					xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
-					mod->task_ticks = xTaskGetTickCount();
-					state(mod, STATE_STARTUP, STATUS_OK);
-					break;
-				}
-			}
+                        mod->power_off();
+                        xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
+                        mod->task_ticks = xTaskGetTickCount();
+                        state(mod, STATE_STARTUP, STATUS_OK);
+                        break;
+                    }
+                }
 
-			switch ((enum issue) mod->task.issue)
-			{
-			case ISSUE_VOLTAGE:
-				state(mod, STATE_CBC, STATUS_OK);
-				break;
-			case ISSUE_HTTP:
-			case ISSUE_NETSCAN:
-				state(mod, STATE_CREG, STATUS_OK);
-				break;
-			default:
-				osDelay(1);
-				break;
-			}
-			break;
+                switch ((enum issue)mod->task.issue) {
+                    case ISSUE_VOLTAGE:
+                        state(mod, STATE_CBC, STATUS_OK);
+                        break;
+                    case ISSUE_HTTP:
+                    case ISSUE_NETSCAN:
+                        state(mod, STATE_CREG, STATUS_OK);
+                        break;
+                    default:
+                        osDelay(1);
+                        break;
+                }
+                break;
 
-		case STATE_CBC:
-			transmit(mod, "AT+CBC");
-			if (parse_battery_charge(mod, 500))
-			{
-				upd_voltage_data(mod);
-				mod->task.callback(0, mod->task.data);
-				task_done(mod);
-				state(mod, STATE_IDLE, STATUS_OK);
-			}
-			else
-			{
-				state(mod, STATE_CBC, STATUS_ERROR);
-			}
-			break;
+            case STATE_CBC:
+                transmit(mod, "AT+CBC");
+                if (parse_battery_charge(mod, 500)) {
+                    upd_voltage_data(mod);
+                    mod->task.callback(0, mod->task.data);
+                    task_done(mod);
+                    state(mod, STATE_IDLE, STATUS_OK);
+                } else {
+                    state(mod, STATE_CBC, STATUS_ERROR);
+                }
+                break;
 
-		case STATE_CREG:
-			ticks = xTaskGetTickCount();
-			done = false;
+            case STATE_CREG:
+                ticks = xTaskGetTickCount();
+                done  = false;
 
-			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(30000))
-			{
-				transmit(mod, "AT+CREG?");
-				if (wait_for(mod, "+CREG: 0,1", 5000))
-				{
-					done = true;
-					break;
-				}
-				osDelay(1000);
-			}
-			if (!done)
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+                while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(30000)) {
+                    transmit(mod, "AT+CREG?");
+                    if (wait_for(mod, "+CREG: 0,1", 5000)) {
+                        done = true;
+                        break;
+                    }
+                    osDelay(1000);
+                }
+                if (!done) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			if (mod->task.issue == ISSUE_NETSCAN)
-				state(mod, STATE_NETSCAN, STATUS_OK);
-			else
-				state(mod, STATE_GPRS_INIT, STATUS_OK);
-			break;
+                if (mod->task.issue == ISSUE_NETSCAN) {
+                    state(mod, STATE_NETSCAN, STATUS_OK);
+                } else {
+                    state(mod, STATE_GPRS_INIT, STATUS_OK);
+                }
+                break;
 
-		case STATE_GPRS_INIT:
-			if (!send_cmd(mod, "AT+SAPBR=3,1,CONTYPE,GPRS", 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+            case STATE_GPRS_INIT:
+                if (!send_cmd(mod, "AT+SAPBR=3,1,CONTYPE,GPRS", 500)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			strcpy(cmd, "AT+SAPBR=3,1,APN,");
-			strcat(cmd, mod->apn);
-			if (!send_cmd(mod, cmd, 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+                strcpy(cmd, "AT+SAPBR=3,1,APN,");
+                strcat(cmd, mod->apn);
+                if (!send_cmd(mod, cmd, 500)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			if (!send_cmd(mod, "AT+SAPBR=1,1", 20000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+                if (!send_cmd(mod, "AT+SAPBR=1,1", 20000)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			transmit(mod, "AT+SAPBR=2,1");
-			if (!wait_for(mod, "+SAPBR: 1,1", 20000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+                transmit(mod, "AT+SAPBR=2,1");
+                if (!wait_for(mod, "+SAPBR: 1,1", 20000)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			state(mod, STATE_GPRS_HTTP, STATUS_OK);
-			break;
+                state(mod, STATE_GPRS_HTTP, STATUS_OK);
+                break;
 
-		case STATE_GPRS_HTTP:
-			if (!send_cmd(mod, "AT+HTTPINIT", 2000) ||
-					!send_cmd(mod, "AT+HTTPPARA=CID,1", 2000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+            case STATE_GPRS_HTTP:
+                if (!send_cmd(mod, "AT+HTTPINIT", 2000) ||
+                    !send_cmd(mod, "AT+HTTPPARA=CID,1", 2000)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			strcpy(cmd, "AT+HTTPPARA=URL,");
-			strcat(cmd, get_http_url(mod));
-			if (!send_cmd(mod, cmd, 2000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+                strcpy(cmd, "AT+HTTPPARA=URL,");
+                strcat(cmd, get_http_url(mod));
+                if (!send_cmd(mod, cmd, 2000)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			// SSL does not work
-			// \r\nOK\r\n\r\n+HTTPACTION: 0,606,0\r\n
+                // SSL does not work
+                // \r\nOK\r\n\r\n+HTTPACTION: 0,606,0\r\n
 
-			if (get_http_req_auth(mod))
-			{
-				strcpy(cmd, "AT+HTTPPARA=USERDATA,Authorization: ");
-				strcat(cmd, get_http_req_auth(mod));
-				if (!send_cmd(mod, cmd, 2000))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-			}
+                if (get_http_req_auth(mod)) {
+                    strcpy(cmd, "AT+HTTPPARA=USERDATA,Authorization: ");
+                    strcat(cmd, get_http_req_auth(mod));
+                    if (!send_cmd(mod, cmd, 2000)) {
+                        state(mod, STATE_IDLE, STATUS_ERROR);
+                        break;
+                    }
+                }
 
-			if (get_http_method(mod))
-			{
-				if (!send_cmd(mod,
-						"AT+HTTPPARA=CONTENT,application/json", 500))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
+                if (get_http_method(mod)) {
+                    if (!send_cmd(mod,
+                                  "AT+HTTPPARA=CONTENT,application/json",
+                                  500)) {
+                        state(mod, STATE_IDLE, STATUS_ERROR);
+                        break;
+                    }
 
-				strcpy(cmd, "AT+HTTPDATA=");
-				utoa(get_http_request_len(mod), &cmd[strlen(cmd)], 10);
-				strcat(cmd, ",1000");
-				transmit(mod, cmd);
-				if (!wait_for(mod, "DOWNLOAD", 1000))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
+                    strcpy(cmd, "AT+HTTPDATA=");
+                    utoa(get_http_request_len(mod), &cmd[strlen(cmd)], 10);
+                    strcat(cmd, ",1000");
+                    transmit(mod, cmd);
+                    if (!wait_for(mod, "DOWNLOAD", 1000)) {
+                        state(mod, STATE_IDLE, STATUS_ERROR);
+                        break;
+                    }
 
-				if (!send_cmd(mod, get_http_request(mod), 500))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-			}
+                    if (!send_cmd(mod, get_http_request(mod), 500)) {
+                        state(mod, STATE_IDLE, STATUS_ERROR);
+                        break;
+                    }
+                }
 
-			strcpy(cmd, "AT+HTTPACTION=");
-			strcat(cmd, get_http_method(mod) ? "1" : "0");
-			transmit(mod, cmd);
-			if (parse_http_action(mod, NULL, 30000) != 200)
-			{
-				state(mod, STATE_GPRS_HTTP_TERM, STATUS_ERROR);
-				break;
-			}
+                strcpy(cmd, "AT+HTTPACTION=");
+                strcat(cmd, get_http_method(mod) ? "1" : "0");
+                transmit(mod, cmd);
+                if (parse_http_action(mod, NULL, 30000) != 200) {
+                    state(mod, STATE_GPRS_HTTP_TERM, STATUS_ERROR);
+                    break;
+                }
 
-			if (get_http_res_auth_get(mod))
-			{
-				transmit(mod, "AT+HTTPHEAD");
-				parse_http_head_auth(mod, 1000);
-			}
+                if (get_http_res_auth_get(mod)) {
+                    transmit(mod, "AT+HTTPHEAD");
+                    parse_http_head_auth(mod, 1000);
+                }
 
-			transmit(mod, "AT+HTTPREAD");
-			if (parse_http_read(mod, 1000) > 0)
-			{
-				mod->task.callback(0, mod->task.data);
-				task_done(mod);
-			}
+                transmit(mod, "AT+HTTPREAD");
+                if (parse_http_read(mod, 1000) > 0) {
+                    mod->task.callback(0, mod->task.data);
+                    task_done(mod);
+                }
 
-			state(mod, STATE_GPRS_HTTP_TERM, STATUS_OK);
-			break;
+                state(mod, STATE_GPRS_HTTP_TERM, STATUS_OK);
+                break;
 
-		case STATE_GPRS_HTTP_TERM:
-			transmit(mod, "AT+HTTPSTATUS?");
-			if (parse_http_status(mod, 500))
-			{
-				state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
-				break;
-			}
+            case STATE_GPRS_HTTP_TERM:
+                transmit(mod, "AT+HTTPSTATUS?");
+                if (parse_http_status(mod, 500)) {
+                    state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
+                    break;
+                }
 
-			if (!send_cmd(mod, "AT+HTTPTERM", 2000))
-			{
-				state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
-				break;
-			}
+                if (!send_cmd(mod, "AT+HTTPTERM", 2000)) {
+                    state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
+                    break;
+                }
 
-			// Continue to send HTTP while connected
-			if (mod->task.issue == ISSUE_IDLE)
-			{
-				if (xQueueReceive(mod->queue, &mod->task, pdMS_TO_TICKS(50)))
-				{
-					mod->task_ticks = xTaskGetTickCount();
-					if (mod->task.issue == ISSUE_HTTP)
-					{
-						state(mod, STATE_GPRS_HTTP, STATUS_OK);
-						break;
-					}
-				}
-			}
+                // Continue to send HTTP while connected
+                if (mod->task.issue == ISSUE_IDLE) {
+                    if (xQueueReceive(mod->queue,
+                                      &mod->task,
+                                      pdMS_TO_TICKS(50))) {
+                        mod->task_ticks = xTaskGetTickCount();
+                        if (mod->task.issue == ISSUE_HTTP) {
+                            state(mod, STATE_GPRS_HTTP, STATUS_OK);
+                            break;
+                        }
+                    }
+                }
 
-			state(mod, STATE_GPRS_DEINIT, STATUS_OK);
-			break;
+                state(mod, STATE_GPRS_DEINIT, STATUS_OK);
+                break;
 
-		case STATE_GPRS_DEINIT:
-			if (send_cmd(mod, "AT+SAPBR=0,1", 10000))
-				state(mod, STATE_IDLE, STATUS_OK);
-			else
-				state(mod, STATE_IDLE, STATUS_ERROR);
-			break;
+            case STATE_GPRS_DEINIT:
+                if (send_cmd(mod, "AT+SAPBR=0,1", 10000)) {
+                    state(mod, STATE_IDLE, STATUS_OK);
+                } else {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                }
+                break;
 
-		case STATE_NETSCAN:
-			if (!send_cmd(mod, "AT+CNETSCAN=1", 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
+            case STATE_NETSCAN:
+                if (!send_cmd(mod, "AT+CNETSCAN=1", 500)) {
+                    state(mod, STATE_IDLE, STATUS_ERROR);
+                    break;
+                }
 
-			transmit(mod, "AT+CNETSCAN");
-			if (!parse_net_scan(mod, 45000))
-			{
-				task_done(mod);
-				state(mod, STATE_IDLE, STATUS_OK);
-			}
-			break;
-		}
-	}
+                transmit(mod, "AT+CNETSCAN");
+                if (!parse_net_scan(mod, 45000)) {
+                    task_done(mod);
+                    state(mod, STATE_IDLE, STATUS_OK);
+                }
+                break;
+        }
+    }
 }
 
 /******************************************************************************/
-int sim800l_voltage(struct sim800l *mod, struct sim800l_voltage *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+int sim800l_voltage(struct sim800l* mod,
+                    struct sim800l_voltage* data,
+                    sim800l_cb callback,
+                    timeout_t timeout) {
+    struct sim800l_task task;
+    BaseType_t status;
 
-	task.issue = ISSUE_VOLTAGE;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+    task.issue    = ISSUE_VOLTAGE;
+    task.timeout  = pdMS_TO_TICKS(timeout);
+    task.callback = callback;
+    task.data     = data;
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    status = xQueueSendToBack(mod->queue, &task, 0);
 
-	if (status == pdTRUE)
-		return 0;
+    if (status == pdTRUE) {
+        return 0;
+    }
 
-	return -1;
+    return -1;
 }
 
 /******************************************************************************/
-int sim800l_http(struct sim800l *mod, struct sim800l_http *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+int sim800l_http(struct sim800l* mod,
+                 struct sim800l_http* data,
+                 sim800l_cb callback,
+                 timeout_t timeout) {
+    struct sim800l_task task;
+    BaseType_t status;
 
-	data->response = NULL;
-	data->res_auth = NULL;
+    data->response = NULL;
+    data->res_auth = NULL;
 
-	task.issue = ISSUE_HTTP;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+    task.issue    = ISSUE_HTTP;
+    task.timeout  = pdMS_TO_TICKS(timeout);
+    task.callback = callback;
+    task.data     = data;
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    status = xQueueSendToBack(mod->queue, &task, 0);
 
-	if (status == pdTRUE)
-		return 0;
+    if (status == pdTRUE) {
+        return 0;
+    }
 
-	return -1;
+    return -1;
 }
 
 /******************************************************************************/
-int sim800l_netscan(struct sim800l *mod, struct sim800l_netscan *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+int sim800l_netscan(struct sim800l* mod,
+                    struct sim800l_netscan* data,
+                    sim800l_cb callback,
+                    timeout_t timeout) {
+    struct sim800l_task task;
+    BaseType_t status;
 
-	task.issue = ISSUE_NETSCAN;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+    task.issue    = ISSUE_NETSCAN;
+    task.timeout  = pdMS_TO_TICKS(timeout);
+    task.callback = callback;
+    task.data     = data;
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    status = xQueueSendToBack(mod->queue, &task, 0);
 
-	if (status == pdTRUE)
-		return 0;
+    if (status == pdTRUE) {
+        return 0;
+    }
 
-	return -1;
+    return -1;
 }

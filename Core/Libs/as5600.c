@@ -24,66 +24,74 @@
 #define COEFF_1 360
 #define COEFF_2 4095
 
-
 /******************************************************************************/
-void as5600_init(struct as5600 *sen, I2C_HandleTypeDef *i2c,
-				 as5600_power_cb power_on, as5600_power_cb power_off)
-{
-	memset(sen, 0, sizeof(*sen));
-	sen->i2c = i2c;
-	sen->power_on = power_on;
-	sen->power_off = power_off;
+void as5600_init(struct as5600* sen,
+                 I2C_HandleTypeDef* i2c,
+                 as5600_power_cb power_on,
+                 as5600_power_cb power_off) {
+    memset(sen, 0, sizeof(*sen));
+    sen->i2c       = i2c;
+    sen->power_on  = power_on;
+    sen->power_off = power_off;
 
-	sen->power_off();
+    sen->power_off();
 }
 
-static int get_status(struct as5600 *sen)
-{
-	HAL_StatusTypeDef status;
-	uint8_t buf;
+static int get_status(struct as5600* sen) {
+    HAL_StatusTypeDef status;
+    uint8_t buf;
 
-	sen->power_on();
+    sen->power_on();
 
-	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_REG_STATUS,
-			I2C_MEMADD_SIZE_8BIT, &buf, 1, I2C_TIMEOUT);
-	sen->power_off();
+    status = HAL_I2C_Mem_Read(sen->i2c,
+                              I2C_ADDRESS,
+                              I2C_REG_STATUS,
+                              I2C_MEMADD_SIZE_8BIT,
+                              &buf,
+                              1,
+                              I2C_TIMEOUT);
+    sen->power_off();
 
-	if (status != HAL_OK)
-		return -1;
+    if (status != HAL_OK) {
+        return -1;
+    }
 
-	return buf;
-}
-
-/******************************************************************************/
-int as5600_is_available(struct as5600 *sen)
-{
-	return get_status(sen) < 0 ? -1 : 0;
-}
-
-/******************************************************************************/
-int as5600_status(struct as5600 *sen)
-{
-	int status = get_status(sen);
-	return status < 0 ? -1 : status & REG_STATUS_MASK;
+    return buf;
 }
 
 /******************************************************************************/
-int32_t as5600_read(struct as5600 *sen)
-{
-	HAL_StatusTypeDef status;
-	uint8_t buf[2];
-	int32_t angle;
+int as5600_is_available(struct as5600* sen) {
+    return get_status(sen) < 0 ? -1 : 0;
+}
 
-	sen->power_on();
+/******************************************************************************/
+int as5600_status(struct as5600* sen) {
+    int status = get_status(sen);
+    return status < 0 ? -1 : status & REG_STATUS_MASK;
+}
 
-	status = HAL_I2C_Mem_Read(sen->i2c, I2C_ADDRESS, I2C_REG_ANGLE_HIGH,
-			I2C_MEMADD_SIZE_8BIT, buf, 2, I2C_TIMEOUT);
-	sen->power_off();
+/******************************************************************************/
+int32_t as5600_read(struct as5600* sen) {
+    HAL_StatusTypeDef status;
+    uint8_t buf[2];
+    int32_t angle;
 
-	if (status != HAL_OK)
-		return -1;
+    sen->power_on();
 
-	angle = (((uint16_t) buf[0] << 8) | buf[1]) & 0x0FFF;
-	angle = angle * 1000 * COEFF_1 / COEFF_2;
-	return angle;
+    status = HAL_I2C_Mem_Read(sen->i2c,
+                              I2C_ADDRESS,
+                              I2C_REG_ANGLE_HIGH,
+                              I2C_MEMADD_SIZE_8BIT,
+                              buf,
+                              2,
+                              I2C_TIMEOUT);
+    sen->power_off();
+
+    if (status != HAL_OK) {
+        return -1;
+    }
+
+    angle = (((uint16_t)buf[0] << 8) | buf[1]) & 0x0FFF;
+    angle = angle * 1000 * COEFF_1 / COEFF_2;
+    return angle;
 }
