@@ -20,6 +20,9 @@
 #include "main.h"
 
 #include "cmsis_os.h"
+#include "dma.h"
+#include "gpio.h"
+#include "iwdg.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -27,6 +30,7 @@
 
 #include <string.h>
 
+#include "adc.h"
 #include "aht20.h"
 #include "appiface.h"
 #include "as5600.h"
@@ -34,6 +38,7 @@
 #include "avoltage.h"
 #include "button.h"
 #include "fws.h"
+#include "i2c.h"
 #include "logger.h"
 #include "mqueue.h"
 #include "ota.h"
@@ -41,8 +46,10 @@
 #include "ptasks.h"
 #include "siface.h"
 #include "sim800l.h"
+#include "spi.h"
 #include "task.h"
 #include "timers.h"
+#include "usart.h"
 #include "w25q_s.h"
 #include "watchdog.h"
 
@@ -76,26 +83,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
 
-I2C_HandleTypeDef hi2c1;
-I2C_HandleTypeDef hi2c2;
-
-IWDG_HandleTypeDef hiwdg;
-
-SPI_HandleTypeDef hspi2;
-
-UART_HandleTypeDef huart2;
-DMA_HandleTypeDef hdma_usart2_rx;
-DMA_HandleTypeDef hdma_usart2_tx;
-
-/* Definitions for def */
-osThreadId_t defHandle;
-const osThreadAttr_t def_attributes = {
-    .name       = "def",
-    .stack_size = 128 * 4,
-    .priority   = (osPriority_t)osPriorityLow,
-};
 /* USER CODE BEGIN PV */
 
 volatile struct bl_params bl __attribute__((section(".noinit")));
@@ -138,16 +126,7 @@ extern const uint32_t* _app;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
-static void MX_SPI2_Init(void);
-static void MX_ADC1_Init(void);
-static void MX_I2C1_Init(void);
-static void MX_I2C2_Init(void);
-static void MX_IWDG_Init(void);
-static void MX_USART2_UART_Init(void);
-void task_default(void* argument);
-
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -551,7 +530,7 @@ static void stack_color(void) {
 }
 
 //
-static size_t stack_size(void) {
+size_t stack_size(void) {
     volatile uint32_t *p, *end;
 
     p   = (uint32_t*)&_ebss;
@@ -601,7 +580,6 @@ int main(void) {
     /* Initialize all configured peripherals */
     MX_GPIO_Init();
     MX_DMA_Init();
-    MX_ADC1_Init();
     MX_IWDG_Init();
     /* USER CODE BEGIN 2 */
 
@@ -706,55 +684,8 @@ int main(void) {
     /* Init scheduler */
     osKernelInitialize();
 
-    /* USER CODE BEGIN RTOS_MUTEX */
-    /* add mutexes, ... */
-    /* USER CODE END RTOS_MUTEX */
-
-    /* USER CODE BEGIN RTOS_SEMAPHORES */
-    /* add semaphores, ... */
-    /* USER CODE END RTOS_SEMAPHORES */
-
-    /* USER CODE BEGIN RTOS_TIMERS */
-    /* start timers, add new ones, ... */
-
-    sync_events = xEventGroupCreate();
-
-    /* USER CODE END RTOS_TIMERS */
-
-    /* USER CODE BEGIN RTOS_QUEUES */
-    /* add queues, ... */
-    /* USER CODE END RTOS_QUEUES */
-
-    /* Create the thread(s) */
-    /* creation of def */
-    defHandle = osThreadNew(task_default, NULL, &def_attributes);
-
-    /* USER CODE BEGIN RTOS_THREADS */
-    /* add threads, ... */
-
-    task_watchdog();
-    task_blink();
-    task_logging(&sys);
-    task_siface(&siface);
-    task_sensors(&sens);
-    task_ecounter(&ecnt);
-    task_sim800l(&mod);
-    task_button(&btn);
-    task_ota(&ota);
-    task_app(&app);
-
-    // For GPIO interrupts and button (?)
-    init_done = 1;
-
-    /* USER CODE END RTOS_THREADS */
-
-    /* USER CODE BEGIN RTOS_EVENTS */
-    /* add events, ... */
-
-    //
-    sys.main_stack_size = stack_size();
-
-    /* USER CODE END RTOS_EVENTS */
+    /* Call init function for freertos objects (in cmsis_os2.c) */
+    MX_FREERTOS_Init();
 
     /* Start scheduler */
     osKernelStart();
@@ -815,365 +746,9 @@ void SystemClock_Config(void) {
     }
 }
 
-/**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC1_Init(void) {
-    /* USER CODE BEGIN ADC1_Init 0 */
-
-    /* USER CODE END ADC1_Init 0 */
-
-    ADC_ChannelConfTypeDef sConfig = {0};
-
-    /* USER CODE BEGIN ADC1_Init 1 */
-
-    /* USER CODE END ADC1_Init 1 */
-
-    /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
-    hadc1.Instance                   = ADC1;
-    hadc1.Init.ClockPrescaler        = ADC_CLOCK_SYNC_PCLK_DIV4;
-    hadc1.Init.Resolution            = ADC_RESOLUTION_12B;
-    hadc1.Init.ScanConvMode          = DISABLE;
-    hadc1.Init.ContinuousConvMode    = DISABLE;
-    hadc1.Init.DiscontinuousConvMode = DISABLE;
-    hadc1.Init.ExternalTrigConvEdge  = ADC_EXTERNALTRIGCONVEDGE_NONE;
-    hadc1.Init.ExternalTrigConv      = ADC_SOFTWARE_START;
-    hadc1.Init.DataAlign             = ADC_DATAALIGN_RIGHT;
-    hadc1.Init.NbrOfConversion       = 1;
-    hadc1.Init.DMAContinuousRequests = DISABLE;
-    hadc1.Init.EOCSelection          = ADC_EOC_SINGLE_CONV;
-    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
-        Error_Handler();
-    }
-
-    /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
-  */
-    sConfig.Channel      = ADC_CHANNEL_8;
-    sConfig.Rank         = 1;
-    sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN ADC1_Init 2 */
-
-    /* USER CODE END ADC1_Init 2 */
-}
-
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void) {
-    /* USER CODE BEGIN I2C1_Init 0 */
-
-    /* USER CODE END I2C1_Init 0 */
-
-    /* USER CODE BEGIN I2C1_Init 1 */
-
-    /* USER CODE END I2C1_Init 1 */
-    hi2c1.Instance             = I2C1;
-    hi2c1.Init.ClockSpeed      = 100000;
-    hi2c1.Init.DutyCycle       = I2C_DUTYCYCLE_2;
-    hi2c1.Init.OwnAddress1     = 0;
-    hi2c1.Init.AddressingMode  = I2C_ADDRESSINGMODE_7BIT;
-    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-    hi2c1.Init.OwnAddress2     = 0;
-    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-    hi2c1.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;
-    if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN I2C1_Init 2 */
-
-    /* USER CODE END I2C1_Init 2 */
-}
-
-/**
-  * @brief I2C2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C2_Init(void) {
-    /* USER CODE BEGIN I2C2_Init 0 */
-
-    /* USER CODE END I2C2_Init 0 */
-
-    /* USER CODE BEGIN I2C2_Init 1 */
-
-    /* USER CODE END I2C2_Init 1 */
-    hi2c2.Instance             = I2C2;
-    hi2c2.Init.ClockSpeed      = 100000;
-    hi2c2.Init.DutyCycle       = I2C_DUTYCYCLE_2;
-    hi2c2.Init.OwnAddress1     = 0;
-    hi2c2.Init.AddressingMode  = I2C_ADDRESSINGMODE_7BIT;
-    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-    hi2c2.Init.OwnAddress2     = 0;
-    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-    hi2c2.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;
-    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN I2C2_Init 2 */
-
-    /* USER CODE END I2C2_Init 2 */
-}
-
-/**
-  * @brief IWDG Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_IWDG_Init(void) {
-    /* USER CODE BEGIN IWDG_Init 0 */
-
-    /* USER CODE END IWDG_Init 0 */
-
-    /* USER CODE BEGIN IWDG_Init 1 */
-
-    /* USER CODE END IWDG_Init 1 */
-    hiwdg.Instance       = IWDG;
-    hiwdg.Init.Prescaler = IWDG_PRESCALER_128;
-    hiwdg.Init.Reload    = 4095;
-    if (HAL_IWDG_Init(&hiwdg) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN IWDG_Init 2 */
-
-    /* USER CODE END IWDG_Init 2 */
-}
-
-/**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI2_Init(void) {
-    /* USER CODE BEGIN SPI2_Init 0 */
-
-    /* USER CODE END SPI2_Init 0 */
-
-    /* USER CODE BEGIN SPI2_Init 1 */
-
-    /* USER CODE END SPI2_Init 1 */
-    /* SPI2 parameter configuration*/
-    hspi2.Instance               = SPI2;
-    hspi2.Init.Mode              = SPI_MODE_MASTER;
-    hspi2.Init.Direction         = SPI_DIRECTION_2LINES;
-    hspi2.Init.DataSize          = SPI_DATASIZE_8BIT;
-    hspi2.Init.CLKPolarity       = SPI_POLARITY_LOW;
-    hspi2.Init.CLKPhase          = SPI_PHASE_1EDGE;
-    hspi2.Init.NSS               = SPI_NSS_SOFT;
-    hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-    hspi2.Init.FirstBit          = SPI_FIRSTBIT_MSB;
-    hspi2.Init.TIMode            = SPI_TIMODE_DISABLE;
-    hspi2.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
-    hspi2.Init.CRCPolynomial     = 10;
-    if (HAL_SPI_Init(&hspi2) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN SPI2_Init 2 */
-
-    /* USER CODE END SPI2_Init 2 */
-}
-
-/**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void) {
-    /* USER CODE BEGIN USART2_Init 0 */
-
-    /* USER CODE END USART2_Init 0 */
-
-    /* USER CODE BEGIN USART2_Init 1 */
-
-    /* USER CODE END USART2_Init 1 */
-    huart2.Instance          = USART2;
-    huart2.Init.BaudRate     = 9600;
-    huart2.Init.WordLength   = UART_WORDLENGTH_8B;
-    huart2.Init.StopBits     = UART_STOPBITS_1;
-    huart2.Init.Parity       = UART_PARITY_NONE;
-    huart2.Init.Mode         = UART_MODE_TX_RX;
-    huart2.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-    if (HAL_UART_Init(&huart2) != HAL_OK) {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN USART2_Init 2 */
-
-    /* USER CODE END USART2_Init 2 */
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void) {
-    /* DMA controller clock enable */
-    __HAL_RCC_DMA1_CLK_ENABLE();
-
-    /* DMA interrupt init */
-    /* DMA1_Stream5_IRQn interrupt configuration */
-    HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
-    /* DMA1_Stream6_IRQn interrupt configuration */
-    HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream6_IRQn);
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void) {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-    /* USER CODE BEGIN MX_GPIO_Init_1 */
-    /* USER CODE END MX_GPIO_Init_1 */
-
-    /* GPIO Ports Clock Enable */
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOH_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(GPIOA, HALL_EN_Pin | MDM_EN_Pin, GPIO_PIN_RESET);
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(GPIOB,
-                      AHT20_EN_Pin | SENS_EN_Pin | MDM_EN_PRE_Pin |
-                          VBAT_MEAS_EN_Pin | LED_MB_Pin | MDM_RST_Pin,
-                      GPIO_PIN_RESET);
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(EXT_WDG_GPIO_Port, EXT_WDG_Pin, GPIO_PIN_SET);
-
-    /*Configure GPIO pin : LED_DB_Pin */
-    GPIO_InitStruct.Pin   = LED_DB_Pin;
-    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull  = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(LED_DB_GPIO_Port, &GPIO_InitStruct);
-
-    /*Configure GPIO pins : PC14 PC15 */
-    GPIO_InitStruct.Pin  = GPIO_PIN_14 | GPIO_PIN_15;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    /*Configure GPIO pin : EXTI0_HALL_Pin */
-    GPIO_InitStruct.Pin  = EXTI0_HALL_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &GPIO_InitStruct);
-
-    /*Configure GPIO pins : PA1 PA5 PA6 */
-    GPIO_InitStruct.Pin  = GPIO_PIN_1 | GPIO_PIN_5 | GPIO_PIN_6;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    /*Configure GPIO pins : BTN_MB_Pin CHRG_OK_Pin CHRG_STAT_Pin */
-    GPIO_InitStruct.Pin  = BTN_MB_Pin | CHRG_OK_Pin | CHRG_STAT_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    /*Configure GPIO pins : HALL_EN_Pin MDM_EN_Pin */
-    GPIO_InitStruct.Pin   = HALL_EN_Pin | MDM_EN_Pin;
-    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull  = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    /*Configure GPIO pins : AHT20_EN_Pin SENS_EN_Pin SPI2_CS_Pin MDM_EN_PRE_Pin
-                           VBAT_MEAS_EN_Pin LED_MB_Pin MDM_RST_Pin */
-    GPIO_InitStruct.Pin   = AHT20_EN_Pin | SENS_EN_Pin | SPI2_CS_Pin |
-                            MDM_EN_PRE_Pin | VBAT_MEAS_EN_Pin | LED_MB_Pin |
-                            MDM_RST_Pin;
-    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull  = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    /*Configure GPIO pin : EXT_WDG_Pin */
-    GPIO_InitStruct.Pin   = EXT_WDG_Pin;
-    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_OD;
-    GPIO_InitStruct.Pull  = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(EXT_WDG_GPIO_Port, &GPIO_InitStruct);
-
-    /* EXTI interrupt init*/
-    HAL_NVIC_SetPriority(EXTI0_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-
-    /* USER CODE BEGIN MX_GPIO_Init_2 */
-    /* USER CODE END MX_GPIO_Init_2 */
-}
-
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_task_default */
-/**
-  * @brief  Function implementing the def thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_task_default */
-void task_default(void* argument) {
-    /* init code for USB_DEVICE */
-    MX_USB_DEVICE_Init();
-    /* USER CODE BEGIN 5 */
-    uint32_t sync_sec = 0;
-    TickType_t wake   = xTaskGetTickCount();
-    EventBits_t bits;
-
-    /* Infinite loop */
-    for (;;) {
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000));
-        atomic_inc(&timestamp);
-        sync_sec++;
-        bits = 0;
-
-        if (params.mtime_count && (sync_sec % params.mtime_count == 0)) {
-            bits |= SYNC_BIT_ECOUNTER;
-        }
-
-        if (params.period_sen && sync_sec >= 5 &&
-            ((sync_sec - 5) % params.period_sen == 0)) {
-            bits |= SYNC_BIT_SENSORS;
-        }
-
-        /* APP fires 10 seconds after the aligned boundary so that sensors
-     * have time to read and write fresh data before app reads the queue */
-        if (params.period_app && sync_sec >= 10 &&
-            ((sync_sec - 10) % params.period_app == 0)) {
-            bits |= SYNC_BIT_APP;
-        }
-
-        if (sync_sec % 5 == 0) {
-            led_blink(1);
-        }
-
-        bits |= SYNC_BIT_WATCHDOG;
-
-        xEventGroupSetBits(sync_events, bits);
-    }
-    /* USER CODE END 5 */
-}
 
 /**
   * @brief  Period elapsed callback in non blocking mode
