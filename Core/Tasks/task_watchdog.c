@@ -2,8 +2,8 @@
  * Watchdog task
  */
 
+#include "iwdg.h"
 #include "ptasks.h"
-#include "watchdog.h"
 
 static osThreadId_t handle;
 static const osThreadAttr_t attributes = {
@@ -19,7 +19,7 @@ static void task(void* argument) {
                             pdTRUE,
                             pdFALSE,
                             portMAX_DELAY);
-        watchdog_reset();
+        IWDG_reset();
     }
 }
 

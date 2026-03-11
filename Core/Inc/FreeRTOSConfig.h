@@ -65,7 +65,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0
 #define configCPU_CLOCK_HZ                      (SystemCoreClock)
-#define configTICK_RATE_HZ                      ((TickType_t)1000)
+#define configTICK_RATE_HZ                      ((TickType_t)100)
 #define configMAX_PRIORITIES                    (56)
 #define configMINIMAL_STACK_SIZE                ((uint16_t)64)
 #define configTOTAL_HEAP_SIZE                   ((size_t)20480)
@@ -77,6 +77,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_RECURSIVE_MUTEXES             1
 #define configUSE_COUNTING_SEMAPHORES           1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
+#define configUSE_TICKLESS_IDLE                 2
 #define configRECORD_STACK_HIGH_ADDRESS         1
 /* USER CODE BEGIN MESSAGE_BUFFER_LENGTH_TYPE */
 /* Defaults to size_t for backward compatibility, but can be changed
@@ -177,8 +178,6 @@ standard names. */
 
 /* USER CODE BEGIN Defines */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
-#define configUSE_TICKLESS_IDLE               1
-#define configEXPECTED_IDLE_TIME_BEFORE_SLEEP 2
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */

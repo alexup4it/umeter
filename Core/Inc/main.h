@@ -57,6 +57,15 @@ void Error_Handler(void);
 void usb_cdc_rx_callback(uint8_t* buf, size_t size);
 void usb_cdc_tx_callback(void);
 
+/* System clock restoration after Stop mode */
+void SystemClock_Config(void);
+
+/* Low-power GPIO helpers (Stop mode) */
+void gpio_enter_stop(void);
+void gpio_exit_stop(void);
+
+/* RTC timestamp helpers — see rtctime.h */
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -81,8 +90,6 @@ void usb_cdc_tx_callback(void);
 #define CHRG_STAT_GPIO_Port    GPIOA
 #define MDM_EN_Pin             GPIO_PIN_10
 #define MDM_EN_GPIO_Port       GPIOA
-#define EXT_WDG_Pin            GPIO_PIN_15
-#define EXT_WDG_GPIO_Port      GPIOA
 #define MDM_EN_PRE_Pin         GPIO_PIN_4
 #define MDM_EN_PRE_GPIO_Port   GPIOB
 #define VBAT_MEAS_EN_Pin       GPIO_PIN_5

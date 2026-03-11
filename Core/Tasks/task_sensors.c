@@ -8,9 +8,9 @@
 #include "aht20.h"
 #include "as5600.h"
 #include "atomic.h"
+#include "iwdg.h"
 #include "logger.h"
 #include "ptasks.h"
-#include "watchdog.h"
 #ifdef LOGGER
 #    define TAG "SENSORS"
 extern struct logger logger;
@@ -52,7 +52,7 @@ static void set_angle_offset(params_t* params, int32_t angle) {
 
     led_blink(10);
 
-    watchdog_reset();
+    IWDG_reset();
     vTaskSuspendAll();
     params_set(&uparams);
     xTaskResumeAll();

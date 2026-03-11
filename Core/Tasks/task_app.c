@@ -21,6 +21,7 @@
 #include "main.h"
 #include "params.h"
 #include "queue.h"
+#include "rtctime.h"
 #include "strjson.h"
 #ifdef LOGGER
 #    define TAG "APP"
@@ -248,7 +249,7 @@ static int parse_time(struct app* app,
         return -1;
     }
 
-    *app->timestamp = temp;
+    set_timestamp(temp);
 #ifdef LOGGER
     logger_add_str(&logger, TAG, false, http->response);
 #endif
