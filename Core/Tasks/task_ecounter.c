@@ -80,6 +80,9 @@ static void task(void* argument) {
 
         /* Update accumulator for min/avg/max aggregation */
         counter_accum_update(ecnt->cnt, value);
+
+        /* Signal completion to scheduler */
+        xEventGroupSetBits(sync_events, SYNC_DONE_ECOUNTER);
     }
 }
 

@@ -18,7 +18,7 @@ static void task(void* argument) {
                             SYNC_BIT_WATCHDOG,
                             pdTRUE,
                             pdFALSE,
-                            portMAX_DELAY);
+                            pdMS_TO_TICKS(30000));
         IWDG_reset();
     }
 }

@@ -299,44 +299,84 @@ void task_default(void* argument) {
     /* init code for USB_DEVICE */
     MX_USB_DEVICE_Init();
     /* USER CODE BEGIN task_default */
-    uint32_t sync_cycles = 0;
-    TickType_t wake      = xTaskGetTickCount();
-    EventBits_t bits;
+    uint32_t tick   = 0;
+    TickType_t wake = xTaskGetTickCount();
 
-    /* Infinite loop — 30 s period */
+    /*
+     * Base period = mtime_count (smallest interval, GCD of all).
+     * Each task receives SYNC_BIT_*, does its work,
+     * sets SYNC_DONE_*. Scheduler waits for completion before
+     * triggering the next task, guaranteeing:
+     *   ecounter finishes → sensors starts → sensors finishes → app starts
+     */
+    /*
+     * Enforce divisibility: each interval must be a multiple of the
+     * one below it.  If not, round down to the nearest multiple.
+     *   base_sec  = mtime_count (or period_sen, or period_app)
+     *   period_sen  must be a multiple of base_sec
+     *   period_app  must be a multiple of period_sen (or base_sec if sen==0)
+     *
+     * A value of 0 means the corresponding task is disabled.
+     */
+    uint32_t period_base = params.mtime_count  ? params.mtime_count
+                           : params.period_sen ? params.period_sen
+                                               : params.period_app;
+
+    if (period_base == 0) {
+        vTaskSuspend(NULL);
+        return;
+    }
+
+    uint32_t period_sen =
+        params.period_sen ? (params.period_sen / period_base) * period_base : 0;
+
+    uint32_t sen_step   = period_sen ? period_sen : period_base;
+    uint32_t period_app = 0;
+    if (params.period_app && sen_step) {
+        period_app = (params.period_app / sen_step) * sen_step;
+    }
+
+    /* How many base ticks between subsystem activations (0 = disabled) */
+    uint32_t cnt_every = params.mtime_count ? 1 : 0;
+    uint32_t sen_every = period_sen ? period_sen / period_base : 0;
+    uint32_t app_every = period_app ? period_app / period_base : 0;
+
+    /* Infinite loop */
     for (;;) {
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(30000));
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(period_base * 1000U));
 
-        /* Update global timestamp from RTC (keeps running in Stop mode) */
+        xEventGroupSetBits(sync_events, SYNC_BIT_WATCHDOG);
+
         timestamp = get_timestamp();
-        sync_cycles++;
 
-        /* Refresh IWDG (32 s timeout, 30 s period → safe) */
-        IWDG_reset();
+        tick++;
 
-        bits = 0;
+        int do_cnt = cnt_every && (tick % cnt_every == 0);
+        int do_sen = sen_every && (tick % sen_every == 0);
+        int do_app = app_every && (tick % app_every == 0);
 
-        /* mtime_count is in seconds; convert 30-s cycles to seconds */
-        uint32_t sync_sec = sync_cycles * 30U;
+        /* --- Sequential pipeline: counter → sensors → app --- */
 
-        if (params.mtime_count && (sync_sec % params.mtime_count == 0)) {
-            bits |= SYNC_BIT_ECOUNTER;
+        if (do_cnt) {
+            xEventGroupSetBits(sync_events, SYNC_BIT_ECOUNTER);
+            xEventGroupWaitBits(sync_events,
+                                SYNC_DONE_ECOUNTER,
+                                pdTRUE,
+                                pdFALSE,
+                                pdMS_TO_TICKS(period_base));
         }
 
-        if (params.period_sen && sync_sec >= 30 &&
-            ((sync_sec - 30) % params.period_sen == 0)) {
-            bits |= SYNC_BIT_SENSORS;
+        if (do_sen) {
+            xEventGroupSetBits(sync_events, SYNC_BIT_SENSORS);
+            xEventGroupWaitBits(sync_events,
+                                SYNC_DONE_SENSORS,
+                                pdTRUE,
+                                pdFALSE,
+                                pdMS_TO_TICKS(period_sen));
         }
 
-        /* APP fires one cycle after the aligned boundary so that sensors
-         * have time to read and write fresh data before app reads the queue */
-        if (params.period_app && sync_sec >= 60 &&
-            ((sync_sec - 60) % params.period_app == 0)) {
-            bits |= SYNC_BIT_APP;
-        }
-
-        if (bits) {
-            xEventGroupSetBits(sync_events, bits);
+        if (do_app) {
+            xEventGroupSetBits(sync_events, SYNC_BIT_APP);
         }
     }
     /* USER CODE END task_default */

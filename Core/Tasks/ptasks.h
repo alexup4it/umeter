@@ -81,11 +81,15 @@ struct system {
 
 struct watchdog;
 
-/* Sync event group bits — set by hz_callback, waited on by tasks */
+/* Sync event group bits — set by scheduler, waited on by tasks */
 #define SYNC_BIT_ECOUNTER (1 << 0)
 #define SYNC_BIT_SENSORS  (1 << 1)
 #define SYNC_BIT_APP      (1 << 2)
 #define SYNC_BIT_WATCHDOG (1 << 3)
+
+/* Completion bits — set by tasks when iteration is done */
+#define SYNC_DONE_ECOUNTER (1 << 4)
+#define SYNC_DONE_SENSORS  (1 << 5)
 
 extern EventGroupHandle_t sync_events;
 

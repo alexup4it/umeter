@@ -114,6 +114,13 @@ static void task(void* argument) {
 #endif
 
     for (;;) {
+        /* Wait for trigger from scheduler (or task_sensors_notify) */
+        xEventGroupWaitBits(sync_events,
+                            SYNC_BIT_SENSORS,
+                            pdTRUE,
+                            pdFALSE,
+                            portMAX_DELAY);
+
         led_blink(3);
 
         // Update sensor readings
@@ -198,12 +205,8 @@ static void task(void* argument) {
             }
         }
 
-        //		vTaskDelayUntil(&wake, pdMS_TO_TICKS(sens->params->period_sen * 1000));
-        xEventGroupWaitBits(sync_events,
-                            SYNC_BIT_SENSORS,
-                            pdTRUE,
-                            pdFALSE,
-                            portMAX_DELAY);
+        /* Signal completion to scheduler */
+        xEventGroupSetBits(sync_events, SYNC_DONE_SENSORS);
     }
 }
 
