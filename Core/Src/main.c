@@ -249,9 +249,31 @@ static void aht20_power_off_cb(void) {
 
 static void counter_power_on_cb(void) {
     HAL_GPIO_WritePin(HALL_EN_GPIO_Port, HALL_EN_Pin, GPIO_PIN_SET);
+
+    /* Restore EXTI interrupt on Hall sensor pin */
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin              = EXTI0_HALL_Pin;
+    gi.Mode             = GPIO_MODE_IT_FALLING;
+    gi.Pull             = GPIO_NOPULL;
+    HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &gi);
+
+    __HAL_GPIO_EXTI_CLEAR_IT(EXTI0_HALL_Pin);
+    HAL_NVIC_ClearPendingIRQ(EXTI0_HALL_EXTI_IRQn);
+    HAL_NVIC_EnableIRQ(EXTI0_HALL_EXTI_IRQn);
 }
 
 static void counter_power_off_cb(void) {
+    /* Disable EXTI to prevent spurious wakeups from Stop mode */
+    HAL_NVIC_DisableIRQ(EXTI0_HALL_EXTI_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(EXTI0_HALL_Pin);
+
+    /* Reconfigure pin to analog — lowest leakage in Stop mode */
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin              = EXTI0_HALL_Pin;
+    gi.Mode             = GPIO_MODE_ANALOG;
+    gi.Pull             = GPIO_NOPULL;
+    HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &gi);
+
     HAL_GPIO_WritePin(HALL_EN_GPIO_Port, HALL_EN_Pin, GPIO_PIN_RESET);
 }
 
@@ -288,7 +310,7 @@ void gpio_enter_stop(void) {
     /* --- W25Q flash: deep power-down BEFORE disabling SPI2 ---
 	 * Reduces flash standby from ~25 µA to ~1 µA.
 	 * SPI2 must still be functional at this point. */
-    w25q_power_on(&mem.mem);
+    w25q_power_down(&mem.mem);
 
     /* --- Disable DMA1 clock (no active transfers during Stop) --- */
     __HAL_RCC_DMA1_CLK_DISABLE();
@@ -304,10 +326,10 @@ void gpio_enter_stop(void) {
 void gpio_exit_stop(void) {
     /* Re-enable port clocks that were disabled */
     __HAL_RCC_DMA1_CLK_ENABLE();
-    __HAL_RCC_ADC1_CLK_ENABLE();
+    __HAL_RCC_GPIOH_CLK_ENABLE();
 
     /* --- W25Q flash: release deep power-down AFTER SPI2 is restored --- */
-    w25q_power_down(&mem.mem);
+    w25q_power_on(&mem.mem);
 }
 
 //
@@ -374,6 +396,20 @@ int main(void) {
 
     /* Initialize all configured peripherals */
     MX_GPIO_Init();
+
+    /* Hall sensor starts powered off — disable EXTI0 and set pin to
+     * analog so it cannot cause spurious wakeups from Stop mode.
+     * counter_power_on_cb() will re-enable it when needed. */
+    HAL_NVIC_DisableIRQ(EXTI0_HALL_EXTI_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(EXTI0_HALL_Pin);
+    {
+        GPIO_InitTypeDef gi = {0};
+        gi.Pin              = EXTI0_HALL_Pin;
+        gi.Mode             = GPIO_MODE_ANALOG;
+        gi.Pull             = GPIO_NOPULL;
+        HAL_GPIO_Init(EXTI0_HALL_GPIO_Port, &gi);
+    }
+
     MX_DMA_Init();
     MX_IWDG_Init();
     MX_RTC_Init();

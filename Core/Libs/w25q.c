@@ -132,7 +132,7 @@ void w25q_init(struct w25q* mem,
 }
 
 /******************************************************************************/
-void w25q_power_down(struct w25q* mem) {
+void w25q_power_on(struct w25q* mem) {
     if (mem->hw_init_cb) {
         mem->hw_init_cb();
     }
@@ -140,7 +140,7 @@ void w25q_power_down(struct w25q* mem) {
 }
 
 /******************************************************************************/
-void w25q_power_on(struct w25q* mem) {
+void w25q_power_down(struct w25q* mem) {
     power_down(mem);
     if (mem->hw_deinit_cb) {
         mem->hw_deinit_cb();
