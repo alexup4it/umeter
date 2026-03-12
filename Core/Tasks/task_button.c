@@ -1,25 +1,19 @@
 /*
  * Button task
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025
  */
 
+#include "button.h"
+#include "cmsis_os.h"
 #include "ptasks.h"
 
-static osThreadId_t handle;
-static const osThreadAttr_t attributes = {
-    .name       = "button",
-    .stack_size = 64 * 4,
-    .priority   = (osPriority_t)osPriorityBelowNormal,
-};
+#define BUTTON_POLL_PERIOD_MS 10
 
-static void task(void* argument) {
-    struct button* btn = argument;
-    button_task(btn);  // <- Infinite loop
-}
+void task_button(void* argument) {
+    struct task_button_ctx* ctx = argument;
+    TickType_t wake             = xTaskGetTickCount();
 
-/******************************************************************************/
-void task_button(struct button* btn) {
-    handle = osThreadNew(task, btn, &attributes);
+    for (;;) {
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(BUTTON_POLL_PERIOD_MS));
+        button_poll(ctx->btn);
+    }
 }

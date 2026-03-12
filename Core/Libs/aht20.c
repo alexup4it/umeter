@@ -30,24 +30,15 @@
 static const uint8_t cmd_init[] = {0xBE, 0x08, 0x00};
 static const uint8_t cmd_meas[] = {0xAC, 0x33, 0x00};
 
-void aht20_init(struct aht20* sen,
-                I2C_HandleTypeDef* i2c,
-                aht20_power_cb power_on,
-                aht20_power_cb power_off) {
+void aht20_init(struct aht20* sen, I2C_HandleTypeDef* i2c) {
     memset(sen, 0, sizeof(*sen));
-    sen->i2c       = i2c;
-    sen->power_on  = power_on;
-    sen->power_off = power_off;
-
-    sen->power_off();
+    sen->i2c = i2c;
 }
 
 /******************************************************************************/
 int aht20_is_available(struct aht20* sen) {
     HAL_StatusTypeDef status;
     uint8_t buf;
-
-    sen->power_on();
 
     status = HAL_I2C_Mem_Read(sen->i2c,
                               I2C_ADDRESS,
@@ -56,7 +47,6 @@ int aht20_is_available(struct aht20* sen) {
                               &buf,
                               1,
                               I2C_TIMEOUT);
-    sen->power_off();
 
     if (status != HAL_OK) {
         return -1;
@@ -89,8 +79,6 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
     uint32_t raw_hum;
     uint8_t buf[7];
 
-    sen->power_on();
-
     /* Status */
     status = HAL_I2C_Mem_Read(sen->i2c,
                               I2C_ADDRESS,
@@ -100,7 +88,6 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
                               1,
                               I2C_TIMEOUT);
     if (status != HAL_OK) {
-        sen->power_off();
         return -1;
     }
 
@@ -112,7 +99,6 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
                                          sizeof(cmd_init),
                                          I2C_TIMEOUT);
         if (status != HAL_OK) {
-            sen->power_off();
             return -1;
         }
         osDelay(10);
@@ -125,7 +111,6 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
                                      sizeof(cmd_meas),
                                      I2C_TIMEOUT);
     if (status != HAL_OK) {
-        sen->power_off();
         return -1;
     }
     osDelay(100); /* "Wait for 80ms for the measurement to be completed" */
@@ -136,7 +121,6 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
                                     buf,
                                     sizeof(buf),
                                     I2C_TIMEOUT);
-    sen->power_off();
     if (status != HAL_OK) {
         return -1;
     }

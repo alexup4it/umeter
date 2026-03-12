@@ -12,13 +12,9 @@
 #include "atomic.h"
 
 /******************************************************************************/
-void counter_init(struct counter* cnt,
-                  counter_power_cb power_on,
-                  counter_power_cb power_off) {
+void counter_init(struct counter* cnt) {
     memset(cnt, 0, sizeof(*cnt));
-    cnt->count     = 0;
-    cnt->power_on  = power_on;
-    cnt->power_off = power_off;
+    cnt->count = 0;
 
     cnt->last_tick  = 0;
     cnt->period_sum = 0;
@@ -49,15 +45,6 @@ void counter_irq(struct counter* cnt) {
 }
 
 /******************************************************************************/
-void counter_power_on(struct counter* cnt) {
-    cnt->power_on();
-}
-
-/******************************************************************************/
-void counter_power_off(struct counter* cnt) {
-    cnt->power_off();
-}
-
 /******************************************************************************/
 void counter_reset(struct counter* cnt) {
     cnt->count      = 0;

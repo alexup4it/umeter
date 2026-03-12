@@ -23,6 +23,6 @@ void button_init(struct button* btn,
                  GPIO_TypeDef* port,
                  uint16_t pin,
                  void* callback);
-void button_task(struct button* btn);
+int button_poll(struct button* btn);
 
 #endif /* BUTTON_H_ */

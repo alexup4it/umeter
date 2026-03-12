@@ -27,11 +27,12 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "atomic.h"
 #include "iwdg.h"
 #include "ptasks.h"
 #include "rtc.h"
-#include "rtctime.h"
+
+extern void pm_flash_enter_stop(void);
+extern void pm_flash_exit_stop(void);
 
 /* USER CODE END Includes */
 
@@ -53,17 +54,20 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
-extern volatile uint32_t timestamp;
-extern params_t params;
-extern struct button btn;
-extern struct siface siface;
-extern struct sensors sens;
-extern struct ecounter ecnt;
-extern struct sim800l mod;
-extern struct ota ota;
-extern struct app app;
-extern struct system sys;
 extern volatile int init_done;
+
+/* Context instances (defined in main.c) */
+extern struct task_default_ctx task_default_ctx;
+extern struct task_blink_ctx task_blink_ctx;
+extern struct task_button_ctx task_button_ctx;
+extern struct task_watchdog_ctx task_watchdog_ctx;
+extern struct task_anemometer_ctx task_anemometer_ctx;
+extern struct task_sensors_ctx task_sensors_ctx;
+extern struct task_modem_ctx task_modem_ctx;
+extern struct task_serial_iface_ctx task_serial_iface_ctx;
+extern struct task_logging_ctx task_logging_ctx;
+extern struct task_net_ctx task_net_ctx;
+extern struct task_ota_ctx task_ota_ctx;
 
 /* USER CODE END Variables */
 /* Definitions for def */
@@ -73,15 +77,93 @@ const osThreadAttr_t def_attributes = {
     .stack_size = 128 * 4,
     .priority   = (osPriority_t)osPriorityLow,
 };
+/* Definitions for blink */
+osThreadId_t blinkHandle;
+const osThreadAttr_t blink_attributes = {
+    .name       = "blink",
+    .stack_size = 64 * 4,
+    .priority   = (osPriority_t)osPriorityLow,
+};
+/* Definitions for button */
+osThreadId_t buttonHandle;
+const osThreadAttr_t button_attributes = {
+    .name       = "button",
+    .stack_size = 64 * 4,
+    .priority   = (osPriority_t)osPriorityBelowNormal,
+};
+/* Definitions for logging */
+osThreadId_t loggingHandle;
+const osThreadAttr_t logging_attributes = {
+    .name       = "logging",
+    .stack_size = 128 * 4,
+    .priority   = (osPriority_t)osPriorityBelowNormal,
+};
+/* Definitions for modem */
+osThreadId_t modemHandle;
+const osThreadAttr_t modem_attributes = {
+    .name       = "modem",
+    .stack_size = 256 * 4,
+    .priority   = (osPriority_t)osPriorityNormal,
+};
+/* Definitions for serial_iface */
+osThreadId_t serial_ifaceHandle;
+const osThreadAttr_t serial_iface_attributes = {
+    .name       = "serial_iface",
+    .stack_size = 128 * 4,
+    .priority   = (osPriority_t)osPriorityNormal,
+};
+/* Definitions for ota */
+osThreadId_t otaHandle;
+const osThreadAttr_t ota_attributes = {
+    .name       = "ota",
+    .stack_size = 512 * 4,
+    .priority   = (osPriority_t)osPriorityNormal,
+};
+/* Definitions for anemometer */
+osThreadId_t anemometerHandle;
+const osThreadAttr_t anemometer_attributes = {
+    .name       = "anemometer",
+    .stack_size = 128 * 4,
+    .priority   = (osPriority_t)osPriorityAboveNormal,
+};
+/* Definitions for sensors */
+osThreadId_t sensorsHandle;
+const osThreadAttr_t sensors_attributes = {
+    .name       = "sensors",
+    .stack_size = 128 * 4,
+    .priority   = (osPriority_t)osPriorityAboveNormal,
+};
+/* Definitions for watchdog */
+osThreadId_t watchdogHandle;
+const osThreadAttr_t watchdog_attributes = {
+    .name       = "watchdog",
+    .stack_size = 64 * 4,
+    .priority   = (osPriority_t)osPriorityHigh,
+};
+/* Definitions for net */
+osThreadId_t netHandle;
+const osThreadAttr_t net_attributes = {
+    .name       = "net",
+    .stack_size = 512 * 4,
+    .priority   = (osPriority_t)osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
-extern size_t stack_size(void);
-
 /* USER CODE END FunctionPrototypes */
 
 void task_default(void* argument);
+extern void task_blink(void* argument);
+extern void task_button(void* argument);
+extern void task_logging(void* argument);
+extern void task_modem(void* argument);
+extern void task_serial_iface(void* argument);
+extern void task_ota(void* argument);
+extern void task_anemometer(void* argument);
+extern void task_sensors(void* argument);
+extern void task_watchdog(void* argument);
+extern void task_net(void* argument);
 
 extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -162,7 +244,7 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime) {
     HAL_SuspendTick();
 
     /* Put peripherals into low-leak configuration */
-    gpio_enter_stop();
+    pm_flash_enter_stop();
 
     /* Calculate wakeup timer value and arm it with interrupt */
     {
@@ -190,7 +272,7 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime) {
     SystemClock_Config();
 
     /* Restore peripheral & GPIO configuration */
-    gpio_exit_stop();
+    pm_flash_exit_stop();
 
     /* Resume HAL tick */
     HAL_ResumeTick();
@@ -249,7 +331,7 @@ void MX_FREERTOS_Init(void) {
     /* USER CODE BEGIN RTOS_TIMERS */
     /* start timers, add new ones, ... */
 
-    sync_events = xEventGroupCreate();
+    task_manager_init();
 
     /* USER CODE END RTOS_TIMERS */
 
@@ -259,32 +341,61 @@ void MX_FREERTOS_Init(void) {
 
     /* Create the thread(s) */
     /* creation of def */
-    defHandle = osThreadNew(task_default, NULL, &def_attributes);
+    defHandle =
+        osThreadNew(task_default, (void*)&task_default_ctx, &def_attributes);
+
+    /* creation of blink */
+    blinkHandle =
+        osThreadNew(task_blink, (void*)&task_blink_ctx, &blink_attributes);
+
+    /* creation of button */
+    buttonHandle =
+        osThreadNew(task_button, (void*)&task_button_ctx, &button_attributes);
+
+    /* creation of logging */
+    loggingHandle = osThreadNew(task_logging,
+                                (void*)&task_logging_ctx,
+                                &logging_attributes);
+
+    /* creation of modem */
+    modemHandle =
+        osThreadNew(task_modem, (void*)&task_modem_ctx, &modem_attributes);
+
+    /* creation of serial_iface */
+    serial_ifaceHandle = osThreadNew(task_serial_iface,
+                                     (void*)&task_serial_iface_ctx,
+                                     &serial_iface_attributes);
+
+    /* creation of ota */
+    otaHandle = osThreadNew(task_ota, (void*)&task_ota_ctx, &ota_attributes);
+
+    /* creation of anemometer */
+    anemometerHandle = osThreadNew(task_anemometer,
+                                   (void*)&task_anemometer_ctx,
+                                   &anemometer_attributes);
+
+    /* creation of sensors */
+    sensorsHandle = osThreadNew(task_sensors,
+                                (void*)&task_sensors_ctx,
+                                &sensors_attributes);
+
+    /* creation of watchdog */
+    watchdogHandle = osThreadNew(task_watchdog,
+                                 (void*)&task_watchdog_ctx,
+                                 &watchdog_attributes);
+
+    /* creation of net */
+    netHandle = osThreadNew(task_net, (void*)&task_net_ctx, &net_attributes);
 
     /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
 
-    task_blink();
-    task_logging(&sys);
-    task_siface(&siface);
-    task_sensors(&sens);
-    task_ecounter(&ecnt);
-    task_sim800l(&mod);
-    task_button(&btn);
-    task_ota(&ota);
-    task_app(&app);
-
-    // For GPIO interrupts and button (?)
     init_done = 1;
 
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
     /* add events, ... */
-
-    //
-    sys.main_stack_size = stack_size();
-
     /* USER CODE END RTOS_EVENTS */
 }
 
@@ -299,86 +410,9 @@ void task_default(void* argument) {
     /* init code for USB_DEVICE */
     MX_USB_DEVICE_Init();
     /* USER CODE BEGIN task_default */
-    uint32_t tick   = 0;
-    TickType_t wake = xTaskGetTickCount();
 
-    /*
-     * Base period = mtime_count (smallest interval, GCD of all).
-     * Each task receives SYNC_BIT_*, does its work,
-     * sets SYNC_DONE_*. Scheduler waits for completion before
-     * triggering the next task, guaranteeing:
-     *   ecounter finishes → sensors starts → sensors finishes → app starts
-     */
-    /*
-     * Enforce divisibility: each interval must be a multiple of the
-     * one below it.  If not, round down to the nearest multiple.
-     *   base_sec  = mtime_count (or period_sen, or period_app)
-     *   period_sen  must be a multiple of base_sec
-     *   period_app  must be a multiple of period_sen (or base_sec if sen==0)
-     *
-     * A value of 0 means the corresponding task is disabled.
-     */
-    uint32_t period_base = params.mtime_count  ? params.mtime_count
-                           : params.period_sen ? params.period_sen
-                                               : params.period_app;
+    task_manager_run();
 
-    if (period_base == 0) {
-        vTaskSuspend(NULL);
-        return;
-    }
-
-    uint32_t period_sen =
-        params.period_sen ? (params.period_sen / period_base) * period_base : 0;
-
-    uint32_t sen_step   = period_sen ? period_sen : period_base;
-    uint32_t period_app = 0;
-    if (params.period_app && sen_step) {
-        period_app = (params.period_app / sen_step) * sen_step;
-    }
-
-    /* How many base ticks between subsystem activations (0 = disabled) */
-    uint32_t cnt_every = params.mtime_count ? 1 : 0;
-    uint32_t sen_every = period_sen ? period_sen / period_base : 0;
-    uint32_t app_every = period_app ? period_app / period_base : 0;
-
-    /* Infinite loop */
-    for (;;) {
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(period_base * 1000U));
-
-        xEventGroupSetBits(sync_events, SYNC_BIT_WATCHDOG);
-
-        timestamp = get_timestamp();
-
-        tick++;
-
-        int do_cnt = cnt_every && (tick % cnt_every == 0);
-        int do_sen = sen_every && (tick % sen_every == 0);
-        int do_app = app_every && (tick % app_every == 0);
-
-        /* --- Sequential pipeline: counter → sensors → app --- */
-
-        if (do_cnt) {
-            xEventGroupSetBits(sync_events, SYNC_BIT_ECOUNTER);
-            xEventGroupWaitBits(sync_events,
-                                SYNC_DONE_ECOUNTER,
-                                pdTRUE,
-                                pdFALSE,
-                                pdMS_TO_TICKS(period_base));
-        }
-
-        if (do_sen) {
-            xEventGroupSetBits(sync_events, SYNC_BIT_SENSORS);
-            xEventGroupWaitBits(sync_events,
-                                SYNC_DONE_SENSORS,
-                                pdTRUE,
-                                pdFALSE,
-                                pdMS_TO_TICKS(period_sen));
-        }
-
-        if (do_app) {
-            xEventGroupSetBits(sync_events, SYNC_BIT_APP);
-        }
-    }
     /* USER CODE END task_default */
 }
 

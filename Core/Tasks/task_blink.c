@@ -5,23 +5,19 @@
 #include "main.h"
 #include "ptasks.h"
 
-static osThreadId_t handle;
-static const osThreadAttr_t attributes = {
-    .name       = "blink",
-    .stack_size = 64 * 4,
-    .priority   = (osPriority_t)osPriorityLow,
-};
-
 static volatile uint8_t pending;
+
+/* task handle is provided by CubeMX (blinkHandle in freertos.c) */
+extern osThreadId_t blinkHandle;
 
 void led_blink(uint8_t count) {
     if (count > pending) {
         pending = count;
     }
-    xTaskNotifyGive(handle);
+    xTaskNotifyGive(blinkHandle);
 }
 
-static void task(void* argument) {
+void task_blink(void* argument) {
     uint8_t count;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -36,9 +32,4 @@ static void task(void* argument) {
             }
         }
     }
-}
-
-/******************************************************************************/
-void task_blink(void) {
-    handle = osThreadNew(task, NULL, &attributes);
 }

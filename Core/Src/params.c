@@ -11,6 +11,8 @@
 
 #include "stm32f4xx_hal.h"
 
+params_t params;
+
 extern const uint32_t* _storage;
 //#define PARAMS_ADDRESS ((uint32_t) &_storage)
 static uint32_t PARAMS_ADDRESS = ((uint32_t)&_storage);
@@ -94,7 +96,6 @@ static void set_default(params_t* params) {
 }
 
 void params_init(void) {
-    params_t params;
     uint32_t id;
 
     params_get(&params);

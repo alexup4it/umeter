@@ -19,20 +19,13 @@
 #define MEAS_SETTLE_MS 2
 
 /******************************************************************************/
-void avoltage_init(struct avoltage* avlt,
-                   ADC_HandleTypeDef* adc,
-                   int ratio,
-                   avoltage_power_cb power_on,
-                   avoltage_power_cb power_off) {
+void avoltage_init(struct avoltage* avlt, ADC_HandleTypeDef* adc, int ratio) {
     memset(avlt, 0, sizeof(*avlt));
-    avlt->adc       = adc;
-    avlt->ratio     = ratio;
-    avlt->power_on  = power_on;
-    avlt->power_off = power_off;
-    avlt->mutex     = xSemaphoreCreateMutex();
+    avlt->adc   = adc;
+    avlt->ratio = ratio;
+    avlt->mutex = xSemaphoreCreateMutex();
 
     /* Start with divider off */
-    avlt->power_off();
 }
 
 /******************************************************************************/
@@ -59,27 +52,21 @@ int avoltage(struct avoltage* avlt) {
     xSemaphoreTake(avlt->mutex, portMAX_DELAY);
 
     /* Enable voltage divider */
-    avlt->power_on();
     osDelay(MEAS_SETTLE_MS);
 
     status = HAL_ADC_Start(avlt->adc);
     if (status != HAL_OK) {
-        avlt->power_off();
         xSemaphoreGive(avlt->mutex);
         return -1;
     }
 
     status = HAL_ADC_PollForConversion(avlt->adc, ADC_TIMEOUT);
     if (status != HAL_OK) {
-        avlt->power_off();
         xSemaphoreGive(avlt->mutex);
         return -1;
     }
 
     value = HAL_ADC_GetValue(avlt->adc);
-
-    /* Disable voltage divider to eliminate quiescent current */
-    avlt->power_off();
 
     xSemaphoreGive(avlt->mutex);
 

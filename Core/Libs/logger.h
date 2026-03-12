@@ -18,6 +18,9 @@ struct logger {
     struct siface* siface;
 };
 
+#ifdef LOGGER
+#endif
+
 void logger_init(struct logger* logger, struct siface* siface);
 
 #ifdef LOGGER

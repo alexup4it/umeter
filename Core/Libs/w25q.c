@@ -121,30 +121,26 @@ void w25q_init(struct w25q* mem,
                SPI_HandleTypeDef* spi,
                GPIO_TypeDef* cs_port,
                uint16_t cs_pin,
-               w25q_hw_cb hw_init_cb,
-               w25q_hw_cb hw_deinit_cb) {
+               void (*spi_init)(void),
+               void (*spi_deinit)(void)) {
     memset(mem, 0, sizeof(*mem));
-    mem->spi          = spi;
-    mem->cs_port      = cs_port;
-    mem->cs_pin       = cs_pin;
-    mem->hw_init_cb   = hw_init_cb;
-    mem->hw_deinit_cb = hw_deinit_cb;
+    mem->spi        = spi;
+    mem->cs_port    = cs_port;
+    mem->cs_pin     = cs_pin;
+    mem->spi_init   = spi_init;
+    mem->spi_deinit = spi_deinit;
 }
 
 /******************************************************************************/
 void w25q_power_on(struct w25q* mem) {
-    if (mem->hw_init_cb) {
-        mem->hw_init_cb();
-    }
+    mem->spi_init();
     release_power_down(mem);
 }
 
 /******************************************************************************/
 void w25q_power_down(struct w25q* mem) {
     power_down(mem);
-    if (mem->hw_deinit_cb) {
-        mem->hw_deinit_cb();
-    }
+    mem->spi_deinit();
 }
 
 /******************************************************************************/

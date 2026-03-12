@@ -1,23 +1,35 @@
 /*
- * Application tasks
+ * Application tasks — shared definitions
  */
 
 #ifndef UMETER_TASKS_H_
 #define UMETER_TASKS_H_
 
-#include "avoltage.h"
-#include "button.h"
-#include "cmsis_os.h"
-#include "counter.h"
+#include "FreeRTOS.h"
 #include "event_groups.h"
 #include "mqueue.h"
-#include "ota.h"
-#include "params.h"
-#include "semphr.h"
-#include "siface.h"
-#include "sim800l.h"
 
-#define SENSORS_QUEUE_SECNUM 48
+extern EventGroupHandle_t task_events;
+
+/* Scheduler → task trigger bits */
+#define TASK_EVENT_ANEMOMETER_START (1 << 0)
+#define TASK_EVENT_SENSORS_START    (1 << 1)
+#define TASK_EVENT_NET_START        (1 << 2)
+#define TASK_EVENT_WATCHDOG_START   (1 << 3)
+
+/* Task → scheduler completion bits */
+#define TASK_EVENT_ANEMOMETER_DONE (1 << 4)
+#define TASK_EVENT_SENSORS_DONE    (1 << 5)
+
+/**
+ * Create event group. Call before scheduler starts.
+ */
+void task_manager_init(void);
+
+/**
+ * Run the scheduling loop (never returns).
+ */
+void task_manager_run(void);
 
 struct sensor_record {
     uint32_t timestamp;
@@ -30,82 +42,92 @@ struct sensor_record {
     uint32_t count_max;
 };
 
-struct actual {
-    SemaphoreHandle_t mutex;
-
-    int avail;
-
-    int voltage;
-    uint32_t count;
-    int32_t angle;
-    int32_t humidity;
-    int32_t temperature;
-};
-
-struct sensors {
-    mqueue_t* queue;
-
-    struct avoltage* avlt;
-    struct as5600* pot;
-    struct aht20* aht;
-    struct counter* cnt;
-    volatile uint32_t* timestamp;
-    params_t* params;
-
-    struct actual* actual;
-    volatile uint32_t events;
-};
-
-struct ecounter {
-    struct counter* cnt;
-    params_t* params;
-
-    struct actual* actual;
-};
-
-struct app {
-    struct sim800l* mod;
-    struct sensors* sens;
-
-    volatile uint32_t* timestamp;
-    volatile struct bl_params* bl;
-    params_t* params;
-};
-
-struct system {
-    volatile struct bl_params* bl;
-    params_t* params;
-
-    size_t main_stack_size;
-};
-
-struct watchdog;
-
-/* Sync event group bits — set by scheduler, waited on by tasks */
-#define SYNC_BIT_ECOUNTER (1 << 0)
-#define SYNC_BIT_SENSORS  (1 << 1)
-#define SYNC_BIT_APP      (1 << 2)
-#define SYNC_BIT_WATCHDOG (1 << 3)
-
-/* Completion bits — set by tasks when iteration is done */
-#define SYNC_DONE_ECOUNTER (1 << 4)
-#define SYNC_DONE_SENSORS  (1 << 5)
-
-extern EventGroupHandle_t sync_events;
+/* --- Utility functions (callable from any context) --- */
 
 void led_blink(uint8_t count);
 
-void task_siface(struct siface* siface);
-void task_sim800l(struct sim800l* mod);
-void task_ota(struct ota* ota);
-void task_app(struct app* app);
-void task_watchdog();
-void task_logging(struct system* sys);
-void task_button(struct button* btn);
-void task_sensors(struct sensors* sens);
-void task_ecounter(struct ecounter* ecnt);
+/* --- ISR forwarders (called from main.c HAL callbacks) --- */
 
-void task_blink(void);
-void task_sensors_notify(struct sensors* sens);
+void sensors_notify(void);
+
+/* --- Queue accessor (sensors → net) --- */
+
+mqueue_t* sensors_queue(void);
+
+/*---------------------------------------------------------------------------*/
+/* Task context structures                                                   */
+/*---------------------------------------------------------------------------*/
+
+/* Forward declarations */
+struct as5600;
+struct aht20;
+struct avoltage;
+struct counter;
+struct button;
+struct siface;
+struct sim800l;
+struct w25q_s;
+struct logger;
+
+typedef void (*pm_fn)(void);
+
+struct task_default_ctx {
+    int _unused;
+};
+
+struct task_blink_ctx {
+    int _unused;
+};
+
+struct task_button_ctx {
+    struct button* btn;
+};
+
+struct task_watchdog_ctx {
+    int _unused;
+};
+
+struct task_anemometer_ctx {
+    struct counter* cnt;
+    pm_fn anemometer_on;
+    pm_fn anemometer_off;
+};
+
+struct task_sensors_ctx {
+    struct as5600* pot;
+    struct aht20* aht;
+    struct avoltage* avlt;
+    struct counter* cnt;
+    struct logger* logger;
+    pm_fn as5600_on;
+    pm_fn as5600_off;
+    pm_fn aht20_on;
+    pm_fn aht20_off;
+    pm_fn avoltage_on;
+    pm_fn avoltage_off;
+};
+
+struct task_modem_ctx {
+    struct sim800l* mod;
+};
+
+struct task_serial_iface_ctx {
+    struct siface* siface;
+};
+
+struct task_logging_ctx {
+    struct logger* logger;
+};
+
+struct task_net_ctx {
+    struct sim800l* mod;
+    struct logger* logger;
+};
+
+struct task_ota_ctx {
+    struct sim800l* mod;
+    struct w25q_s* mem;
+    struct logger* logger;
+};
 
 #endif /* UMETER_TASKS_H_ */

@@ -2,14 +2,12 @@
  * Button
  *
  * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025
+ * 2025-2026
  */
 
 #include "button.h"
 
 #include <string.h>
-
-#include "cmsis_os.h"
 
 #define PERIOD 10
 #define DELAY  200
@@ -28,33 +26,29 @@ void button_init(struct button* btn,
 }
 
 /******************************************************************************/
-// TODO: Low power optimization
-// TODO: Several buttons in one task
-void button_task(struct button* btn) {
+int button_poll(struct button* btn) {
     void (*callback)(void) = btn->callback;
-    TickType_t wake        = xTaskGetTickCount();
     int state;
 
-    for (;;) {
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(PERIOD));
+    if (btn->counter) {
+        btn->counter--;
+    }
 
-        if (btn->counter) {
-            btn->counter--;
-        };
+    if (btn->counter) {
+        return 0;
+    }
 
-        if (btn->counter) {
-            continue;
-        }
+    state = ~HAL_GPIO_ReadPin(btn->port, btn->pin) & 0x01;
 
-        state = ~HAL_GPIO_ReadPin(btn->port, btn->pin) & 0x01;
+    if (btn->state != state) {
+        btn->state   = state;
+        btn->counter = DELAY / PERIOD;
 
-        if (btn->state != state) {
-            btn->state   = state;
-            btn->counter = DELAY / PERIOD;
-
-            if (state) {
-                callback();
-            }
+        if (state) {
+            callback();
+            return 1;
         }
     }
+
+    return 0;
 }

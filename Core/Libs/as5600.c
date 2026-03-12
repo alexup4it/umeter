@@ -9,8 +9,6 @@
 
 #include <string.h>
 
-#include "cmsis_os.h"
-
 #define I2C_TIMEOUT 50
 
 #define I2C_ADDRESS 0x6C
@@ -25,23 +23,15 @@
 #define COEFF_2 4095
 
 /******************************************************************************/
-void as5600_init(struct as5600* sen,
-                 I2C_HandleTypeDef* i2c,
-                 as5600_power_cb power_on,
-                 as5600_power_cb power_off) {
-    memset(sen, 0, sizeof(*sen));
-    sen->i2c       = i2c;
-    sen->power_on  = power_on;
-    sen->power_off = power_off;
 
-    sen->power_off();
+void as5600_init(struct as5600* sen, I2C_HandleTypeDef* i2c) {
+    memset(sen, 0, sizeof(*sen));
+    sen->i2c = i2c;
 }
 
 static int get_status(struct as5600* sen) {
     HAL_StatusTypeDef status;
     uint8_t buf;
-
-    sen->power_on();
 
     status = HAL_I2C_Mem_Read(sen->i2c,
                               I2C_ADDRESS,
@@ -50,7 +40,6 @@ static int get_status(struct as5600* sen) {
                               &buf,
                               1,
                               I2C_TIMEOUT);
-    sen->power_off();
 
     if (status != HAL_OK) {
         return -1;
@@ -76,8 +65,6 @@ int32_t as5600_read(struct as5600* sen) {
     uint8_t buf[2];
     int32_t angle;
 
-    sen->power_on();
-
     status = HAL_I2C_Mem_Read(sen->i2c,
                               I2C_ADDRESS,
                               I2C_REG_ANGLE_HIGH,
@@ -85,7 +72,6 @@ int32_t as5600_read(struct as5600* sen) {
                               buf,
                               2,
                               I2C_TIMEOUT);
-    sen->power_off();
 
     if (status != HAL_OK) {
         return -1;

@@ -13,6 +13,9 @@
 #include "cmsis_os.h"
 #include "queue.h"
 
+#ifdef LOGGER
+#endif
+
 #define MAX_DATA_LEN 96
 
 /******************************************************************************/

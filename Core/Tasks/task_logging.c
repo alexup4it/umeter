@@ -17,14 +17,12 @@
 #ifdef LOGGER
 
 #    define TAG "SYSTEM"
-extern struct logger logger;
 
-static osThreadId_t handle;
-static const osThreadAttr_t attributes = {
-    .name       = "logging",
-    .stack_size = 120 * 4,
-    .priority   = (osPriority_t)osPriorityBelowNormal,
-};
+extern volatile struct bl_params bl;
+extern size_t stack_size(void);
+
+static size_t main_stack_size;
+static struct logger* s_logger;
 
 static void print_info_str(struct logger* logger,
                            const char* header,
@@ -46,35 +44,35 @@ static void print_info_str(struct logger* logger,
     vPortFree(buf);
 }
 
-static void info_base(struct system* sys) {
+static void info_base(void) {
     char temp[32];
 
-    utoa(sys->main_stack_size, temp, 10);
-    print_info_str(&logger, "MAIN", "stack_size", temp);
+    utoa(main_stack_size, temp, 10);
+    print_info_str(s_logger, "MAIN", "stack_size", temp);
 
-    print_info_str(&logger, "BL", "git", (char*)sys->bl->hash);
-    utoa(sys->bl->status, temp, 10);
-    print_info_str(&logger, "BL", "status", temp);
+    print_info_str(s_logger, "BL", "git", (char*)bl.hash);
+    utoa(bl.status, temp, 10);
+    print_info_str(s_logger, "BL", "status", temp);
 
-    print_info_str(&logger, "APP", "git", GIT_COMMIT_HASH);
-    print_info_str(&logger, "APP", "name", PARAMS_DEVICE_NAME);
+    print_info_str(s_logger, "APP", "git", GIT_COMMIT_HASH);
+    print_info_str(s_logger, "APP", "name", PARAMS_DEVICE_NAME);
     utoa(PARAMS_FW_VERSION, temp, 10);
-    print_info_str(&logger, "APP", "ver", temp);
-    print_info_str(&logger, "APP", "MCU", sys->params->mcu_uid);
+    print_info_str(s_logger, "APP", "ver", temp);
+    print_info_str(s_logger, "APP", "MCU", params.mcu_uid);
 
-    utoa(sys->params->offset_angle, temp, 10);
-    print_info_str(&logger, "PARAMS", "angle_offset", temp);
+    utoa(params.offset_angle, temp, 10);
+    print_info_str(s_logger, "PARAMS", "angle_offset", temp);
 }
 
 static void info_mem(void) {
     const char* t_names[] = {"def",
                              "logging",
-                             "app",
-                             "siface",
+                             "net",
+                             "serial_iface",
                              "ota",
-                             "sim800l",
+                             "modem",
                              "sensors",
-                             "ecounter",
+                             "anemometer",
                              "button",
                              "watchdog",
                              NULL};
@@ -83,7 +81,7 @@ static void info_mem(void) {
     char temp[16];
 
     utoa(xPortGetMinimumEverFreeHeapSize(), temp, 10);
-    print_info_str(&logger, "HEAP", "~", temp);
+    print_info_str(s_logger, "HEAP", "~", temp);
 
     for (int i = 0; t_names[i]; i++) {
         t_handle = xTaskGetHandle(t_names[i]);
@@ -93,38 +91,35 @@ static void info_mem(void) {
 
         vTaskGetInfo(t_handle, &details, pdTRUE, eInvalid);
         utoa(details.usStackHighWaterMark * sizeof(StackType_t), temp, 10);
-        print_info_str(&logger, "STACK", t_names[i], temp);
+        print_info_str(s_logger, "STACK", t_names[i], temp);
     }
 }
 
-static void task(void* argument) {
-    struct system* sys = argument;
+#endif /* LOGGER */
 
+void task_logging(void* argument) {
+#ifdef LOGGER
     extern USBD_HandleTypeDef hUsbDeviceFS;
+    struct task_logging_ctx* ctx = argument;
 
-    /* Wait 1 second for USB host to enumerate */
+    s_logger        = ctx->logger;
+    main_stack_size = stack_size();
+
     osDelay(1000);
 
     if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
-        /* No USB host connected — disable USB and stop logging task */
         MX_USB_DEVICE_DeInit();
         vTaskDelete(NULL);
         return;
     }
 
     for (;;) {
-        info_base(sys);
+        info_base();
         info_mem();
 
         osDelay(20000);
     }
-}
-
-#endif /* LOGGER */
-
-/******************************************************************************/
-void task_logging(struct system* sys) {
-#ifdef LOGGER
-    handle = osThreadNew(task, sys, &attributes);
+#else
+    vTaskDelete(NULL);
 #endif
 }

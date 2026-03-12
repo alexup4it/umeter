@@ -7,6 +7,9 @@
 extern "C" {
 #endif
 
+/** Global Unix timestamp, updated by rtctime_update(). */
+extern uint32_t timestamp;
+
 /**
  * Convert calendar date/time to Unix epoch (seconds since 1970-01-01 00:00:00).
  */
@@ -27,6 +30,11 @@ void epoch_to_date(uint32_t epoch,
  * Read current RTC calendar and return Unix timestamp.
  */
 uint32_t get_timestamp(void);
+
+/**
+ * Update global timestamp from RTC.
+ */
+void rtctime_read(void);
 
 /**
  * Set RTC calendar from Unix timestamp and update global `timestamp` variable.

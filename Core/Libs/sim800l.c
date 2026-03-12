@@ -10,21 +10,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "logger.h"
 #include "task.h"
 
 #define MAX_ERRORS 5
 
 #define CMD_BUFFER_SIZE 96
 
-/*
- * Hardware power management replaces AT sleep and RF disable.
- * Modem is powered off completely when idle via MDM_EN/MDM_EN_PRE pins.
- */
-
-#include "logger.h"
 #ifdef LOGGER
 #    define TAG "SIM800L"
-extern struct logger logger;
 #endif
 
 enum status {
@@ -61,13 +55,15 @@ inline static void task_done(struct sim800l* mod) {
 /******************************************************************************/
 void sim800l_init(struct sim800l* mod,
                   UART_HandleTypeDef* uart,
-                  sim800l_power_cb power_on,
-                  sim800l_power_cb power_off,
-                  char* apn) {
+                  char* apn,
+                  void (*power_on)(void),
+                  void (*power_off)(void),
+                  struct logger* logger) {
     memset(mod, 0, sizeof(*mod));
     mod->uart      = uart;
     mod->power_on  = power_on;
     mod->power_off = power_off;
+    mod->logger    = logger;
     mod->stream    = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
     mod->queue =
         xQueueCreate(SIM800L_TASK_QUEUE_SIZE, sizeof(struct sim800l_task));
@@ -80,9 +76,9 @@ void sim800l_init(struct sim800l* mod,
 }
 
 /******************************************************************************/
-void sim800l_irq(struct sim800l* mod, const char* buf, size_t len) {
+void sim800l_irq(struct sim800l* mod, size_t len) {
     BaseType_t woken = pdFALSE;
-    xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
+    xStreamBufferSendFromISR(mod->stream, mod->rx_buffer, len, &woken);
 }
 
 inline static void clear_rx_buffer(struct sim800l* mod) {
@@ -108,7 +104,7 @@ static bool wait_for_any(struct sim800l* mod, timeout_t timeout) {
     }
 
 #ifdef LOGGER
-    logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+    logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
 
     return true;
@@ -131,7 +127,7 @@ static bool wait_for(struct sim800l* mod,
         mod->rxb[mod->rxlen] = '\0';
         if (strstr((char*)mod->rxb, substr)) {
 #ifdef LOGGER
-            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+            logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
             return true;
         }
@@ -154,7 +150,7 @@ static bool wait_for(struct sim800l* mod,
 
 #ifdef LOGGER
     if (mod->rxlen) {
-        logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+        logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
     }
 #endif
     return false;
@@ -176,14 +172,14 @@ static bool wait_for_ok(struct sim800l* mod, timeout_t timeout) {
 
         if (strstr((char*)mod->rxb, "OK")) {
 #ifdef LOGGER
-            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+            logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
             return true;
         }
 
         if (strstr((char*)mod->rxb, "ERROR")) {
 #ifdef LOGGER
-            logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+            logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
 #endif
             return false;
         }
@@ -206,7 +202,7 @@ static bool wait_for_ok(struct sim800l* mod, timeout_t timeout) {
 
 #ifdef LOGGER
     if (mod->rxlen) {
-        logger_add(&logger, TAG, false, (char*)mod->rxb, mod->rxlen);
+        logger_add(mod->logger, TAG, false, (char*)mod->rxb, mod->rxlen);
     }
 #endif
     return false;
@@ -226,7 +222,7 @@ static void transmit_data(struct sim800l* mod, const uint8_t* buf, size_t len) {
     osDelay(20);
 
 #ifdef LOGGER
-    logger_add(&logger, TAG, false, (char*)mod->txb, len);
+    logger_add(mod->logger, TAG, false, (char*)mod->txb, len);
 #endif
 
     clear_rx_buffer(mod);
@@ -711,7 +707,7 @@ void sim800l_task(struct sim800l* mod) {
                         mod->task_ticks = xTaskGetTickCount();
                     } else {
 #ifdef LOGGER
-                        logger_add_str(&logger, TAG, false, "power off...");
+                        logger_add_str(mod->logger, TAG, false, "power off...");
 #endif
                         mod->power_off();
                         xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);

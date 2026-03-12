@@ -19,8 +19,6 @@
 /* Speed = COUNTER_SPEED_SCALE / period_avg_ms */
 #define COUNTER_SPEED_SCALE 10000
 
-typedef void (*counter_power_cb)(void);
-
 struct counter_accum {
     uint32_t avg;
     uint32_t min;
@@ -29,8 +27,6 @@ struct counter_accum {
 
 struct counter {
     volatile uint32_t count;
-    counter_power_cb power_on;
-    counter_power_cb power_off;
 
     /* Period tracking (filled in IRQ) */
     volatile uint32_t last_tick;
@@ -45,12 +41,8 @@ struct counter {
     size_t accum_cnt;
 };
 
-void counter_init(struct counter* cnt,
-                  counter_power_cb power_on,
-                  counter_power_cb power_off);
+void counter_init(struct counter* cnt);
 void counter_irq(struct counter* cnt);
-void counter_power_on(struct counter* cnt);
-void counter_power_off(struct counter* cnt);
 void counter_reset(struct counter* cnt);
 uint32_t counter(struct counter* cnt);
 uint32_t counter_period_avg(struct counter* cnt);

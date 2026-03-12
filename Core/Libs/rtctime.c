@@ -3,8 +3,8 @@
 #include "rtc.h"
 #include "stm32f4xx_hal.h"
 
-/* Global timestamp maintained by task_default / set_timestamp */
-extern volatile uint32_t timestamp;
+/* Global timestamp maintained by rtctime_update / set_timestamp */
+uint32_t timestamp;
 
 /*---------------------------------------------------------------------------*/
 /* Internal helpers                                                          */
@@ -87,6 +87,10 @@ uint32_t get_timestamp(void) {
                          t.Hours,
                          t.Minutes,
                          t.Seconds);
+}
+
+void rtctime_read(void) {
+    timestamp = get_timestamp();
 }
 
 void set_timestamp(uint32_t unix_ts) {

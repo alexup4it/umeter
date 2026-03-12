@@ -22,13 +22,13 @@
 
 #define SIM800L_APN_SIZE 32
 
+struct logger;
+
 #define SIM800L_NETSCAN_DONE 1
 
 typedef uint64_t timeout_t;
 
 typedef void (*sim800l_cb)(int, void*);
-typedef void (*sim800l_power_cb)(void);
-
 /*
  * @brief: SIM800L task structure
  * TODO: fields description
@@ -46,8 +46,6 @@ struct sim800l_task {
  */
 struct sim800l {
     UART_HandleTypeDef* uart;
-    sim800l_power_cb power_on;
-    sim800l_power_cb power_off;
 
     StreamBufferHandle_t stream;
     xQueueHandle queue;
@@ -67,6 +65,12 @@ struct sim800l {
 
     int bcl;
     int voltage;
+
+    void (*power_on)(void);
+    void (*power_off)(void);
+    struct logger* logger;
+
+    char rx_buffer[SIM800L_UART_BUFFER_SIZE];
 };
 
 /*
@@ -118,18 +122,20 @@ struct sim800l_netscan {
  * @param power_off: callback to power off the modem (RST low → UART deinit → GPIO off)
  * @param apn: APN string
  */
+
 void sim800l_init(struct sim800l* mod,
                   UART_HandleTypeDef* uart,
-                  sim800l_power_cb power_on,
-                  sim800l_power_cb power_off,
-                  char* apn);
+                  char* apn,
+                  void (*power_on)(void),
+                  void (*power_off)(void),
+                  struct logger* logger);
 /*
  * @brief: Copy data from UART interrupt handler
  * @param mod: struct sim800l handle
  * @param buf: data buffer
  * @param len: data buffer length (in bytes)
  */
-void sim800l_irq(struct sim800l* mod, const char* buf, size_t len);
+void sim800l_irq(struct sim800l* mod, size_t len);
 
 /*
  * @brief: SIM800L task
