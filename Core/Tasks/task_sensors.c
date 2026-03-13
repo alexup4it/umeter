@@ -8,10 +8,8 @@
 #include "actual.h"
 #include "aht20.h"
 #include "as5600.h"
-#include "atomic.h"
 #include "avoltage.h"
 #include "counter.h"
-#include "iwdg.h"
 #include "logger.h"
 #include "mqueue.h"
 #include "params.h"
@@ -46,31 +44,9 @@ enum {
 };
 
 static mqueue_t* queue;
-static volatile uint32_t events;
 
 mqueue_t* sensors_queue(void) {
     return queue;
-}
-
-static void set_angle_offset(int32_t angle) {
-    params_t uparams;
-
-    memcpy(&uparams, &params, sizeof(uparams));
-    uparams.offset_angle = angle;
-
-    led_blink(10);
-
-    IWDG_reset();
-    vTaskSuspendAll();
-    params_set(&uparams);
-    xTaskResumeAll();
-
-    params.offset_angle = angle;
-}
-
-void sensors_notify(void) {
-    atomic_inc(&events);
-    xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_START);
 }
 
 void task_sensors(void* argument) {
@@ -214,14 +190,6 @@ void task_sensors(void* argument) {
             rec.count_max = ca.max;
 
             mqueue_set(queue, &rec);
-        }
-
-        if (events) {
-            events = 0;
-
-            if (drdy & DRDY_ANG) {
-                set_angle_offset(angle);
-            }
         }
 
         xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_DONE);

@@ -48,7 +48,7 @@ void led_blink(uint8_t count);
 
 /* --- ISR forwarders (called from main.c HAL callbacks) --- */
 
-void sensors_notify(void);
+void task_button_irq_notify_from_isr(void);
 
 /* --- Queue accessor (sensors → net) --- */
 

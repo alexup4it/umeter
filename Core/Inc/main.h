@@ -74,8 +74,8 @@ void gpio_exit_stop(void);
 #define EXTI0_HALL_Pin         GPIO_PIN_0
 #define EXTI0_HALL_GPIO_Port   GPIOA
 #define EXTI0_HALL_EXTI_IRQn   EXTI0_IRQn
-#define BTN_MB_Pin             GPIO_PIN_4
-#define BTN_MB_GPIO_Port       GPIOA
+#define BTN_Pin                GPIO_PIN_4
+#define BTN_GPIO_Port          GPIOA
 #define HALL_EN_Pin            GPIO_PIN_7
 #define HALL_EN_GPIO_Port      GPIOA
 #define AHT20_EN_Pin           GPIO_PIN_1

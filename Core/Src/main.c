@@ -314,21 +314,25 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart) {
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    GPIO_PinState pin_state;
+
     if (!init_done) {
         return;
     }
 
     if (GPIO_Pin == EXTI0_HALL_Pin) {
         counter_irq(&cnt);
-    }
-}
-
-void btn_callback(void) {
-    if (!init_done) {
         return;
     }
 
-    sensors_notify();
+    if (GPIO_Pin == BTN_Pin) {
+        pin_state = HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin);
+        if (button_irq_callback(&btn,
+                                (pin_state == GPIO_PIN_RESET),
+                                HAL_GetTick())) {
+            task_button_irq_notify_from_isr();
+        }
+    }
 }
 
 //
@@ -412,7 +416,7 @@ int main(void) {
     appif.uparams = params;
 
     //
-    button_init(&btn, BTN_MB_GPIO_Port, BTN_MB_Pin, btn_callback);
+    button_init(&btn, NULL, 50);
     siface_init(&siface, 32, appiface, &appif);
 #ifdef LOGGER
     logger_init(&logger, &siface);

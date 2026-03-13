@@ -8,21 +8,23 @@
 #ifndef BUTTON_H_
 #define BUTTON_H_
 
-#include "stm32f4xx_hal.h"
+#include <stdint.h>
+
+typedef void (*button_callback_t)(void);
 
 struct button {
-    GPIO_TypeDef* port;
-    uint16_t pin;
-    int counter;
-    int state;
-
-    void* callback;
+    button_callback_t callback;
+    uint32_t debounce_ms;
+    uint32_t press_started_at_ms;
+    uint32_t ignore_until_ms;
+    uint8_t is_pressed;
+    uint8_t ignore_active;
 };
 
 void button_init(struct button* btn,
-                 GPIO_TypeDef* port,
-                 uint16_t pin,
-                 void* callback);
-int button_poll(struct button* btn);
+                 button_callback_t callback,
+                 uint32_t debounce_ms);
+int button_irq_callback(struct button* btn, int is_pressed, uint32_t now_ms);
+void button_dispatch(struct button* btn);
 
 #endif /* BUTTON_H_ */

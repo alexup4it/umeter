@@ -9,46 +9,64 @@
 
 #include <string.h>
 
-#define PERIOD 10
-#define DELAY  200
-
-/******************************************************************************/
-void button_init(struct button* btn,
-                 GPIO_TypeDef* port,
-                 uint16_t pin,
-                 void* callback) {
-    memset(btn, 0, sizeof(*btn));
-    btn->port     = port;
-    btn->pin      = pin;
-    btn->counter  = 0;
-    btn->state    = 0;
-    btn->callback = callback;
+static int time_reached(uint32_t now, uint32_t deadline) {
+    return (int32_t)(now - deadline) >= 0;
 }
 
 /******************************************************************************/
-int button_poll(struct button* btn) {
-    void (*callback)(void) = btn->callback;
-    int state;
-
-    if (btn->counter) {
-        btn->counter--;
+void button_init(struct button* btn,
+                 button_callback_t callback,
+                 uint32_t debounce_ms) {
+    memset(btn, 0, sizeof(*btn));
+    btn->callback    = callback;
+    btn->debounce_ms = debounce_ms;
+    if (btn->debounce_ms == 0) {
+        btn->debounce_ms = 1;
     }
+}
 
-    if (btn->counter) {
+/******************************************************************************/
+int button_irq_callback(struct button* btn, int is_pressed, uint32_t now_ms) {
+    uint32_t held_ms;
+
+    if (!btn) {
         return 0;
     }
 
-    state = ~HAL_GPIO_ReadPin(btn->port, btn->pin) & 0x01;
-
-    if (btn->state != state) {
-        btn->state   = state;
-        btn->counter = DELAY / PERIOD;
-
-        if (state) {
-            callback();
-            return 1;
+    if (btn->ignore_active) {
+        if (!time_reached(now_ms, btn->ignore_until_ms)) {
+            return 0;
         }
+        btn->ignore_active = 0;
     }
 
-    return 0;
+    if (is_pressed) {
+        if (!btn->is_pressed) {
+            btn->is_pressed          = 1;
+            btn->press_started_at_ms = now_ms;
+        }
+        return 0;
+    }
+
+    if (!btn->is_pressed) {
+        return 0;
+    }
+
+    btn->is_pressed = 0;
+    held_ms         = now_ms - btn->press_started_at_ms;
+
+    if (held_ms < btn->debounce_ms) {
+        return 0;
+    }
+
+    btn->ignore_until_ms = now_ms + btn->debounce_ms;
+    btn->ignore_active   = 1;
+    return 1;
+}
+
+/******************************************************************************/
+void button_dispatch(struct button* btn) {
+    if (btn && btn->callback) {
+        btn->callback();
+    }
 }
