@@ -23,13 +23,9 @@
 #include "sim800l.h"
 #include "w25q_s.h"
 
-static struct sim800l* s_mod;
 static struct w25q_s* s_mem;
 
-#define OTA_CHECK_INTERVAL_MS (2 * 60 * 60 * 1000)
-
-#define DELAY_HTTP_MS    60000
-#define DELAY_SIM800L_MS (DELAY_HTTP_MS * 5)
+#define OTA_CHECK_INTERVAL_MS (2 * 60 * 60 * 1000)  // 2 hours
 
 #define JSON_MAX_TOKENS 32
 
@@ -41,8 +37,6 @@ static struct w25q_s* s_mem;
 
 extern const uint32_t* _app_len;
 #define APP_LENGTH ((uint32_t)&_app_len)
-
-static TaskHandle_t ota_handle;
 
 // https://github.com/zserge/jsmn/blob/master/example/simple.c
 static int jsoneq(const char* json, jsmntok_t* tok, const char* s) {
@@ -140,47 +134,46 @@ static int parse_json(const char* response,
     return vermax;
 }
 
-static void ota_callback(int status, void* data) {
-    struct sim800l_http* http = data;
-    TaskHandle_t task         = *((TaskHandle_t*)http->context);
-
-    BaseType_t woken = pdFALSE;
-    vTaskNotifyGiveFromISR(task, &woken);
+static void strtolower(char* data) {
+    while (*data) {
+        *data = tolower(*data);
+        data++;
+    }
 }
 
-static int request_list(struct sim800l_http* http) {
-    strcpy(http->url, params.url_ota);
-    strcat(http->url, "/api/list?name=");
-    strcat(http->url, PARAMS_DEVICE_NAME);
-    http->req_auth     = NULL;
-    http->res_auth     = NULL;
-    http->res_auth_get = true;
-    http->request      = NULL;
-    http->response     = NULL;
-    http->context      = &ota_handle;
+static int ota_http_get(const char* url,
+                        char* hmac_buf,
+                        struct sim800l_http_response* response) {
+    struct modem_request request = {0};
 
-    return sim800l_http(s_mod, http, ota_callback, DELAY_HTTP_MS);
+    request.type      = MODEM_REQ_HTTP_GET;
+    request.url       = url;
+    request.read_auth = true;
+    request.response  = response;
+
+    return modem_execute(&request);
 }
 
-static int request_file(struct sim800l_http* http,
-                        const char* filename,
-                        uint32_t addr,
-                        uint32_t size) {
-    strcpy(http->url, params.url_ota);
-    strcat(http->url, "/api/file?file=");
-    strcat(http->url, filename);
-    strcat(http->url, "&addr=");
-    utoa(addr, &http->url[strlen(http->url)], 10);
-    strcat(http->url, "&size=");
-    utoa(size, &http->url[strlen(http->url)], 10);
-    http->req_auth     = NULL;
-    http->res_auth     = NULL;
-    http->res_auth_get = true;
-    http->request      = NULL;
-    http->response     = NULL;
-    http->context      = &ota_handle;
+static bool ota_verify_response(struct sim800l_http_response* response,
+                                char* hmac_buf) {
+    if (!response->authorization || !response->body) {
+        return false;
+    }
 
-    return sim800l_http(s_mod, http, ota_callback, DELAY_HTTP_MS);
+    hmac_base64(params.secret, response->body, response->body_length, hmac_buf);
+    strtolower(hmac_buf);
+    return strcmp(hmac_buf, response->authorization) == 0;
+}
+
+static void ota_response_free(struct sim800l_http_response* response) {
+    if (response->body) {
+        vPortFree(response->body);
+        response->body = NULL;
+    }
+    if (response->authorization) {
+        vPortFree(response->authorization);
+        response->authorization = NULL;
+    }
 }
 
 static void flash_erase(uint32_t addr, uint16_t size) {
@@ -244,17 +237,10 @@ static uint32_t flash_checksum(uint32_t addr, uint32_t size) {
     return checksum;
 }
 
-static void strtolower(char* data) {
-    while (*data) {
-        *data = tolower(*data);
-        data++;
-    }
-}
-
 /******************************************************************************/
 void task_ota(void* argument) {
     struct task_ota_ctx* ctx = argument;
-    struct sim800l_http http;
+    struct sim800l_http_response response;
     char filename[64];
     struct fws fws;
     uint32_t addr;
@@ -264,15 +250,11 @@ void task_ota(void* argument) {
     char url[PARAMS_OTA_URL_SIZE + 64];
     char hmac_buf[HMAC_BASE64_LEN];
 
-    s_mod = ctx->mod;
     s_mem = ctx->mem;
 
     if (w25q_s_get_manufacturer_id(s_mem) != FWS_WINBOND_MANUFACTURER_ID) {
         vTaskDelete(NULL);
     }
-
-    ota_handle = xTaskGetCurrentTaskHandle();
-    http.url   = url;
 
     goto startup;
 
@@ -280,98 +262,68 @@ void task_ota(void* argument) {
         osDelay(OTA_CHECK_INTERVAL_MS);
 
     startup:
-        // Request firmware list
-        ret = request_list(&http);
-        if (ret) {
-            continue;
-        }
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DELAY_SIM800L_MS));
+        /* Request firmware list */
+        strcpy(url, params.url_ota);
+        strcat(url, "/api/list?name=");
+        strcat(url, PARAMS_DEVICE_NAME);
 
-        // Error
-        if (!http.res_auth || !http.response) {
-            if (http.res_auth) {
-                vPortFree(http.res_auth);
-            }
-            if (http.response) {
-                vPortFree(http.response);
-            }
+        memset(&response, 0, sizeof(response));
+        ret = ota_http_get(url, hmac_buf, &response);
+        if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
+            ota_response_free(&response);
             continue;
         }
 
-        // Authorization
-        hmac_base64(params.secret, http.response, http.rlen, hmac_buf);
-        strtolower(hmac_buf);
-        if (strcmp(hmac_buf, http.res_auth) != 0) {
-            vPortFree(http.res_auth);
-            vPortFree(http.response);
-            continue;
-        }
+        /* Parse firmware list */
+        ret = parse_json(response.body, &fws, filename, sizeof(filename));
+        ota_response_free(&response);
 
-        // Parse firmware list
-        ret = parse_json(http.response, &fws, filename, sizeof(filename));
-        vPortFree(http.res_auth);
-        vPortFree(http.response);
-
-        // No update or error
+        /* No update or error */
         if (ret <= PARAMS_FW_VERSION) {
             continue;
         }
 
-        // Too big firmware
+        /* Too big firmware */
         if (fws.size > APP_LENGTH) {
             continue;
         }
 
-        // Erase SPI FLASH
+        /* Erase SPI FLASH */
         flash_erase(FWS_PAYLOAD_ADDR, fws.size);
 
-        // Updating
+        /* Download firmware in chunks */
         addr    = 0;
         retries = RETRIES;
         while (retries && addr < fws.size) {
-            // Request newest firmware file
-            ret = request_file(&http, filename, addr, FILE_PART_SIZE);
-            if (ret) {
-                retries--;
-                continue; /* while */
-            }
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DELAY_SIM800L_MS));
+            /* Build file request URL */
+            strcpy(url, params.url_ota);
+            strcat(url, "/api/file?file=");
+            strcat(url, filename);
+            strcat(url, "&addr=");
+            utoa(addr, &url[strlen(url)], 10);
+            strcat(url, "&size=");
+            utoa(FILE_PART_SIZE, &url[strlen(url)], 10);
 
-            // Error
-            if (!http.res_auth || !http.response) {
-                if (http.res_auth) {
-                    vPortFree(http.res_auth);
-                }
-                if (http.response) {
-                    vPortFree(http.response);
-                }
+            memset(&response, 0, sizeof(response));
+            ret = ota_http_get(url, hmac_buf, &response);
+            if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
+                ota_response_free(&response);
                 retries--;
-                continue; /* while */
+                continue;
             }
 
-            // Authorization
-            hmac_base64(params.secret, http.response, http.rlen, hmac_buf);
-            strtolower(hmac_buf);
-            if (strcmp(hmac_buf, http.res_auth) != 0) {
-                vPortFree(http.res_auth);
-                vPortFree(http.response);
-                retries--;
-                continue; /* while */
-            }
-
-            // Write data to SPI FLASH
+            /* Write data to SPI FLASH */
             flash_write(FWS_PAYLOAD_ADDR + addr,
-                        (uint8_t*)http.response,
-                        http.rlen);
+                        (uint8_t*)response.body,
+                        response.body_length);
 
-            addr += http.rlen;
-            retries = RETRIES;  // Reset retries
+            addr += response.body_length;
+            retries = RETRIES;
 
-            vPortFree(http.res_auth);
-            vPortFree(http.response);
+            ota_response_free(&response);
         }
 
-        // Expand to a multiple of 4
+        /* Expand to a multiple of 4 */
         if (fws.size % sizeof(uint32_t)) {
             int expand   = sizeof(uint32_t) - fws.size % sizeof(uint32_t);
             uint8_t byte = 0xFF;
@@ -384,16 +336,16 @@ void task_ota(void* argument) {
             }
         }
 
-        // Checksum
+        /* Checksum */
         if (flash_checksum(FWS_PAYLOAD_ADDR, fws.size) != fws.checksum) {
             continue;
         }
 
-        // Update SPI FLASH header
+        /* Update SPI FLASH header */
         fws.loaded = 0;
         flash_write_header(&fws);
 
-        // Reset
+        /* Reset */
         osDelay(100);
         NVIC_SystemReset();
     }

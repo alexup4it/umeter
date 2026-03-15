@@ -18,17 +18,16 @@ void led_blink(uint8_t count) {
 }
 
 void task_blink(void* argument) {
-    uint8_t count;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        count   = pending;
-        pending = 0;
+        uint8_t count = pending;
+        pending       = 0;
         for (uint8_t i = 0; i < count; i++) {
             HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_RESET);
-            osDelay(10);
+            osDelay(pdMS_TO_TICKS(10));
             HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
             if (i < count - 1) {
-                osDelay(200);
+                osDelay(pdMS_TO_TICKS(200));
             }
         }
     }
