@@ -95,7 +95,7 @@ struct counter cnt;
 struct avoltage avlt;
 struct button btn;
 struct siface siface;
-struct sim800l mod;
+struct sim800l modem;
 struct w25q_s mem;
 #ifdef LOGGER
 struct logger logger;
@@ -248,7 +248,12 @@ struct task_sensors_ctx task_sensors_ctx = {
 };
 
 struct task_modem_ctx task_modem_ctx = {
-    .mod = &mod,
+    .modem     = &modem,
+    .power_on  = pm_modem_on,
+    .power_off = pm_modem_off,
+#ifdef LOGGER
+    .logger = &logger,
+#endif
 };
 
 struct task_serial_iface_ctx task_serial_iface_ctx = {
@@ -262,14 +267,12 @@ struct task_logging_ctx task_logging_ctx = {
 };
 
 struct task_net_ctx task_net_ctx = {
-    .mod = &mod,
 #ifdef LOGGER
     .logger = &logger,
 #endif
 };
 
 struct task_ota_ctx task_ota_ctx = {
-    .mod = &mod,
     .mem = &mem,
 #ifdef LOGGER
     .logger = &logger,
@@ -294,17 +297,17 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
     }
 
     if (huart == &huart2) {
-        sim800l_irq(&mod, size);
-        HAL_UARTEx_ReceiveToIdle_DMA(mod.uart,
-                                     (uint8_t*)mod.rx_buffer,
+        sim800l_irq(&modem, size);
+        HAL_UARTEx_ReceiveToIdle_DMA(modem.uart,
+                                     (uint8_t*)modem.dma_buffer,
                                      SIM800L_UART_BUFFER_SIZE);
     }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart) {
     if (huart == &huart2) {
-        HAL_UARTEx_ReceiveToIdle_DMA(mod.uart,
-                                     (uint8_t*)mod.rx_buffer,
+        HAL_UARTEx_ReceiveToIdle_DMA(modem.uart,
+                                     (uint8_t*)modem.dma_buffer,
                                      SIM800L_UART_BUFFER_SIZE);
     }
 }
@@ -427,7 +430,8 @@ int main(void) {
                 SPI2_CS_Pin,
                 pm_flash_spi_init,
                 pm_flash_spi_deinit);
-    sim800l_init(&mod, &huart2, params.apn, pm_modem_on, pm_modem_off, &logger);
+    sim800l_init(&modem, &huart2, params.apn, &logger);
+    modem_init();
     as5600_init(&pot, &hi2c1);
     aht20_init(&aht, &hi2c2);
     counter_init(&cnt);

@@ -5,9 +5,12 @@
 #ifndef UMETER_TASKS_H_
 #define UMETER_TASKS_H_
 
+#include <stdbool.h>
+
 #include "FreeRTOS.h"
 #include "event_groups.h"
 #include "mqueue.h"
+#include "task.h"
 
 extern EventGroupHandle_t task_events;
 
@@ -108,7 +111,10 @@ struct task_sensors_ctx {
 };
 
 struct task_modem_ctx {
-    struct sim800l* mod;
+    struct sim800l* modem;
+    struct logger* logger;
+    pm_fn power_on;
+    pm_fn power_off;
 };
 
 struct task_serial_iface_ctx {
@@ -120,14 +126,60 @@ struct task_logging_ctx {
 };
 
 struct task_net_ctx {
-    struct sim800l* mod;
     struct logger* logger;
 };
 
 struct task_ota_ctx {
-    struct sim800l* mod;
     struct w25q_s* mem;
     struct logger* logger;
 };
+
+/*---------------------------------------------------------------------------*/
+/* Modem request interface (task_modem ↔ task_net / task_ota)                */
+/*---------------------------------------------------------------------------*/
+
+struct sim800l_http_response;
+struct sim800l_netscan_result;
+
+enum modem_request_type {
+    MODEM_REQ_HTTP_GET,
+    MODEM_REQ_HTTP_POST,
+    MODEM_REQ_NETSCAN,
+};
+
+struct modem_request {
+    enum modem_request_type type;
+
+    /* HTTP fields */
+    const char* url;
+    const char* auth_header;
+    const char* body;
+    bool read_auth;
+    struct sim800l_http_response* response;
+
+    /* Netscan field */
+    struct sim800l_netscan_result* netscan_result;
+
+    /* Completion signaling (set by modem_execute) */
+    TaskHandle_t caller;
+    int* result;
+};
+
+/**
+ * Initialize modem request queue. Call before scheduler starts.
+ */
+void modem_init(void);
+
+/**
+ * Submit a request to the modem task (non-blocking).
+ * @return 0 on success, -1 if queue is full
+ */
+int modem_submit(struct modem_request* request);
+
+/**
+ * Submit a request and block until it completes.
+ * @return result code from modem processing
+ */
+int modem_execute(struct modem_request* request);
 
 #endif /* UMETER_TASKS_H_ */
