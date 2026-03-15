@@ -162,8 +162,10 @@ void w25q_sector_erase(struct w25q* mem, uint32_t address) {
 
     delay();
     ms = HAL_GetTick();
-    while (spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
-           W25Q_BUSY_FLAG_MASK) {
+    while (
+        spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
+        W25Q_BUSY_FLAG_MASK
+    ) {
         if ((HAL_GetTick() - ms) > BUSY_TIMEOUT) {
             return;
         }
@@ -189,8 +191,10 @@ void w25q_block_erase(struct w25q* mem, uint32_t address) {
 
     delay();
     ms = HAL_GetTick();
-    while (spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
-           W25Q_BUSY_FLAG_MASK) {
+    while (
+        spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
+        W25Q_BUSY_FLAG_MASK
+    ) {
         if ((HAL_GetTick() - ms) > BLOCK_ERASE_TIMEOUT) {
             return;
         }
@@ -210,8 +214,10 @@ void w25q_chip_erase(struct w25q* mem) {
 
     delay();
     ms = HAL_GetTick();
-    while (spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
-           W25Q_BUSY_FLAG_MASK) {
+    while (
+        spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
+        W25Q_BUSY_FLAG_MASK
+    ) {
         if ((HAL_GetTick() - ms) > CHIP_ERASE_TIMEOUT) {
             return;
         }
@@ -259,8 +265,10 @@ void w25q_write_data(struct w25q* mem,
 
     delay();
     ms = HAL_GetTick();
-    while (spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
-           W25Q_BUSY_FLAG_MASK) {
+    while (
+        spi_read_status_reg(mem, W25Q_CMD_READ_STATUS_REG1) &
+        W25Q_BUSY_FLAG_MASK
+    ) {
         if ((HAL_GetTick() - ms) > BUSY_TIMEOUT) {
             return;
         }
