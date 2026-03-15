@@ -272,7 +272,7 @@ int sim800l_wait_network(struct sim800l* self, uint32_t timeout_ms) {
         if (read_to(self, 5000, "+CREG: 0,1")) {
             return 0;
         }
-        osDelay(1000);
+        osDelay(pdMS_TO_TICKS(1000));
     }
 
     return -1;

@@ -52,7 +52,7 @@ int avoltage(struct avoltage* avlt) {
     xSemaphoreTake(avlt->mutex, portMAX_DELAY);
 
     /* Enable voltage divider */
-    osDelay(MEAS_SETTLE_MS);
+    osDelay(pdMS_TO_TICKS(MEAS_SETTLE_MS));
 
     status = HAL_ADC_Start(avlt->adc);
     if (status != HAL_OK) {

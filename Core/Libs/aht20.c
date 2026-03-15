@@ -101,7 +101,7 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
         if (status != HAL_OK) {
             return -1;
         }
-        osDelay(10);
+        osDelay(pdMS_TO_TICKS(10));
     }
 
     /* Trigger measurement */
@@ -113,7 +113,8 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
     if (status != HAL_OK) {
         return -1;
     }
-    osDelay(100); /* "Wait for 80ms for the measurement to be completed" */
+    osDelay(pdMS_TO_TICKS(
+        100)); /* "Wait for 80ms for the measurement to be completed" */
 
     /* Receive data */
     status = HAL_I2C_Master_Receive(sen->i2c,

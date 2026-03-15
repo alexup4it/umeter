@@ -259,7 +259,7 @@ void task_ota(void* argument) {
     goto startup;
 
     for (;;) {
-        osDelay(OTA_CHECK_INTERVAL_MS);
+        osDelay(pdMS_TO_TICKS(OTA_CHECK_INTERVAL_MS));
 
     startup:
         /* Request firmware list */
@@ -346,7 +346,7 @@ void task_ota(void* argument) {
         flash_write_header(&fws);
 
         /* Reset */
-        osDelay(100);
+        osDelay(pdMS_TO_TICKS(100));
         NVIC_SystemReset();
     }
 }

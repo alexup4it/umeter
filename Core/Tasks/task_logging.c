@@ -105,7 +105,7 @@ void task_logging(void* argument) {
     s_logger        = ctx->logger;
     main_stack_size = stack_size();
 
-    osDelay(1000);
+    osDelay(pdMS_TO_TICKS(1000));
 
     if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
         MX_USB_DEVICE_DeInit();

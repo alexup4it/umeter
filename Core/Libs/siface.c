@@ -83,7 +83,7 @@ static int command(struct siface* siface, int wait_time) {
     }
 
     /* Try again */
-    osDelay(wait_time);
+    osDelay(pdMS_TO_TICKS(wait_time));
 
     received = receive_buf(siface);
     if (!received) {

@@ -123,12 +123,12 @@ void MX_FREERTOS_Init(void);
 static void pm_modem_on(void) {
     HAL_GPIO_WritePin(MDM_RST_GPIO_Port, MDM_RST_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_SET);
-    osDelay(200);
+    osDelay(pdMS_TO_TICKS(200));
     HAL_GPIO_WritePin(MDM_EN_GPIO_Port, MDM_EN_Pin, GPIO_PIN_SET);
-    osDelay(100);
+    osDelay(pdMS_TO_TICKS(100));
     MX_USART2_UART_Init();
     HAL_GPIO_WritePin(MDM_RST_GPIO_Port, MDM_RST_Pin, GPIO_PIN_SET);
-    osDelay(3000);
+    osDelay(pdMS_TO_TICKS(3000));
 }
 
 static void pm_modem_off(void) {
@@ -140,7 +140,7 @@ static void pm_modem_off(void) {
 
 static void pm_as5600_on(void) {
     HAL_GPIO_WritePin(SENS_EN_GPIO_Port, SENS_EN_Pin, GPIO_PIN_SET);
-    osDelay(20);
+    osDelay(pdMS_TO_TICKS(20));
     MX_I2C1_Init();
 }
 
@@ -150,9 +150,9 @@ static void pm_as5600_off(void) {
 }
 
 static void pm_aht20_on(void) {
-    HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_SET);
-    osDelay(100);
     MX_I2C2_Init();
+    HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_SET);
+    osDelay(pdMS_TO_TICKS(100));
 }
 
 static void pm_aht20_off(void) {
@@ -188,10 +188,13 @@ static void pm_anemometer_off(void) {
 }
 
 static void pm_avoltage_on(void) {
+    MX_ADC1_Init();
     HAL_GPIO_WritePin(VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin, GPIO_PIN_SET);
+    osDelay(pdMS_TO_TICKS(10));
 }
 
 static void pm_avoltage_off(void) {
+    HAL_ADC_MspDeInit(&hadc1);
     HAL_GPIO_WritePin(VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin, GPIO_PIN_RESET);
 }
 
