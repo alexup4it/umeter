@@ -18,10 +18,17 @@ AllowShortBlocksOnASingleLine: Empty
 AllowShortEnumsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: false
-AllowShortLoopsOnASingleLine: false
+AllowShortLoopsOnASingleLine: true
 
 BinPackArguments: false
 BinPackParameters: OnePerLine
+
+BreakAfterOpenBracketIf: true
+BreakBeforeCloseBracketIf: true
+BreakAfterOpenBracketLoop: true
+BreakBeforeCloseBracketLoop: true
+BreakAfterOpenBracketSwitch: true
+BreakBeforeCloseBracketSwitch: true
 
 DerivePointerAlignment: false
 
@@ -33,5 +40,6 @@ IndentPPDirectives: AfterHash
 
 LineEnding: LF
 
+RemoveEmptyLinesInUnwrappedLines: true
 
 

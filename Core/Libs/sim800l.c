@@ -59,9 +59,9 @@ static void transmit(struct sim800l* self, const char* data) {
 #endif
 
     clear_rx(self);
-    while (HAL_UART_Transmit_DMA(self->uart, self->tx_buffer, length) ==
-           HAL_BUSY)
-        ;
+    while (
+        HAL_UART_Transmit_DMA(self->uart, self->tx_buffer, length) == HAL_BUSY
+    );
 }
 
 /**
