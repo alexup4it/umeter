@@ -8,8 +8,8 @@
 #include <stdbool.h>
 
 #include "FreeRTOS.h"
+#include "cmsis_os.h"
 #include "event_groups.h"
-#include "mqueue.h"
 #include "task.h"
 
 extern EventGroupHandle_t task_events;
@@ -29,20 +29,22 @@ extern EventGroupHandle_t task_events;
  */
 void task_manager_init(void);
 
+struct sensorq;
+
 /**
  * Run the scheduling loop (never returns).
  */
-void task_manager_run(void);
+void task_manager_run(struct sensorq* sensorq);
 
 struct sensor_record {
     uint32_t timestamp;
-    int32_t voltage;
-    int32_t temperature;
-    int32_t humidity;
-    int32_t angle;
-    uint32_t count_avg;
-    uint32_t count_min;
-    uint32_t count_max;
+    uint16_t voltage;    /* millivolts              */
+    int16_t temperature; /* centidegrees C (0.01°C) */
+    uint16_t humidity;   /* centipercent RH (0.01%) */
+    uint16_t angle;      /* centidegrees (0.01°)    */
+    uint16_t count_avg;
+    uint16_t count_min;
+    uint16_t count_max;
 };
 
 /* --- Utility functions (callable from any context) --- */
@@ -55,7 +57,7 @@ void task_button_irq_notify_from_isr(void);
 
 /* --- Queue accessor (sensors → net) --- */
 
-mqueue_t* sensors_queue(void);
+#define SENSORS_QUEUE_CAPACITY 100
 
 /*---------------------------------------------------------------------------*/
 /* Task context structures                                                   */
@@ -75,7 +77,7 @@ struct logger;
 typedef void (*pm_fn)(void);
 
 struct task_default_ctx {
-    int _unused;
+    struct sensorq* queue;
 };
 
 struct task_blink_ctx {
@@ -97,6 +99,7 @@ struct task_anemometer_ctx {
 };
 
 struct task_sensors_ctx {
+    struct sensorq* queue;
     struct as5600* pot;
     struct aht20* aht;
     struct avoltage* avlt;
@@ -126,6 +129,7 @@ struct task_logging_ctx {
 };
 
 struct task_net_ctx {
+    struct sensorq* queue;
     struct logger* logger;
 };
 

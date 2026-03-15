@@ -12,8 +12,7 @@
 #include "semphr.h"
 #include "w25q.h"
 
-#define W25Q_S_READ_TIMEOUT  pdMS_TO_TICKS(100)
-#define W25Q_S_WRITE_TIMEOUT pdMS_TO_TICKS(500)
+#define W25Q_S_MUTEX_TIMEOUT pdMS_TO_TICKS(500)
 
 struct w25q_s {
     SemaphoreHandle_t mutex;
@@ -30,42 +29,45 @@ inline static void w25q_s_init(struct w25q_s* smem,
     w25q_init(&smem->mem, spi, cs_port, cs_pin, spi_init, spi_deinit);
 }
 
-inline static void w25q_s_sector_erase(struct w25q_s* smem, uint32_t address) {
-    if (xSemaphoreTake(smem->mutex, W25Q_S_WRITE_TIMEOUT) == pdFALSE) {
-        return;
+inline static int w25q_s_sector_erase(struct w25q_s* smem, uint32_t address) {
+    if (xSemaphoreTake(smem->mutex, W25Q_S_MUTEX_TIMEOUT) == pdFALSE) {
+        return -1;
     }
 
     w25q_sector_erase(&smem->mem, address);
     xSemaphoreGive(smem->mutex);
+    return 0;
 }
 
-inline static void w25q_s_read_data(struct w25q_s* smem,
-                                    uint32_t address,
-                                    uint8_t* data,
-                                    uint16_t size) {
-    if (xSemaphoreTake(smem->mutex, W25Q_S_READ_TIMEOUT) == pdFALSE) {
-        return;
+inline static int w25q_s_read_data(struct w25q_s* smem,
+                                   uint32_t address,
+                                   uint8_t* data,
+                                   uint16_t size) {
+    if (xSemaphoreTake(smem->mutex, W25Q_S_MUTEX_TIMEOUT) == pdFALSE) {
+        return -1;
     }
 
     w25q_read_data(&smem->mem, address, data, size);
     xSemaphoreGive(smem->mutex);
+    return 0;
 }
 
-inline static void w25q_s_write_data(struct w25q_s* smem,
-                                     uint32_t address,
-                                     uint8_t* data,
-                                     uint16_t size) {
-    if (xSemaphoreTake(smem->mutex, W25Q_S_WRITE_TIMEOUT) == pdFALSE) {
-        return;
+inline static int w25q_s_write_data(struct w25q_s* smem,
+                                    uint32_t address,
+                                    uint8_t* data,
+                                    uint16_t size) {
+    if (xSemaphoreTake(smem->mutex, W25Q_S_MUTEX_TIMEOUT) == pdFALSE) {
+        return -1;
     }
 
     w25q_write_data(&smem->mem, address, data, size);
     xSemaphoreGive(smem->mutex);
+    return 0;
 }
 
 inline static size_t w25q_s_get_capacity(struct w25q_s* smem) {
     size_t cap;
-    if (xSemaphoreTake(smem->mutex, W25Q_S_READ_TIMEOUT) == pdFALSE) {
+    if (xSemaphoreTake(smem->mutex, W25Q_S_MUTEX_TIMEOUT) == pdFALSE) {
         return 0;
     }
 
@@ -76,7 +78,7 @@ inline static size_t w25q_s_get_capacity(struct w25q_s* smem) {
 
 inline static uint8_t w25q_s_get_manufacturer_id(struct w25q_s* smem) {
     uint8_t mid;
-    if (xSemaphoreTake(smem->mutex, W25Q_S_READ_TIMEOUT) == pdFALSE) {
+    if (xSemaphoreTake(smem->mutex, W25Q_S_MUTEX_TIMEOUT) == pdFALSE) {
         return 0;
     }
 

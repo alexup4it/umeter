@@ -8,10 +8,10 @@
 #include <string.h>
 
 #include "actual.h"
-#include "mqueue.h"
 #include "params.h"
 #include "ptasks.h"
 #include "rtctime.h"
+#include "sensorq.h"
 
 #define JSMN_HEADER
 #include "base64.h"
@@ -36,7 +36,6 @@
 #define READ_TAMPER (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15))
 
 extern volatile struct bl_params bl;
-extern mqueue_t* sensors_queue(void);
 
 struct sensor_item {
     uint32_t value;
@@ -123,35 +122,31 @@ static void response_free(struct sim800l_http_response* response) {
 /* Sensor data encoding                                                       */
 /******************************************************************************/
 
-static int sensor_read(mqueue_t* queue,
+static int sensor_read(struct sensorq* queue,
                        struct sensor_record* records,
                        int max_count) {
-    int count = 0;
-
-    while (count < max_count) {
-        int ret = mqueue_get(queue, &records[count]);
-        if (ret == -MFIFO_ERR_INVALID_CRC) {
-            continue;
-        }
-        if (ret) {
-            break;
-        }
-        count++;
-    }
-
-    return count;
+    return sensorq_peek(queue, records, max_count);
 }
 
 static void sensor_field_encode(struct sensor_record* records,
                                 int count,
                                 size_t field_offset,
+                                int is_signed,
+                                int scale,
                                 char* output) {
     struct sensor_item items[MAX_RECORDS_PER_BATCH];
     size_t encoded_length;
 
     for (int i = 0; i < count; i++) {
+        const uint8_t* p = (const uint8_t*)&records[i] + field_offset;
+        int32_t raw;
+        if (is_signed) {
+            raw = *(const int16_t*)p;
+        } else {
+            raw = *(const uint16_t*)p;
+        }
         items[i].timestamp = records[i].timestamp;
-        items[i].value     = *(uint32_t*)((uint8_t*)&records[i] + field_offset);
+        items[i].value     = (uint32_t)(raw * scale);
     }
 
     base64_encode((unsigned char*)items,
@@ -325,6 +320,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, count_avg),
+                            0,
+                            1,
                             encoded);
         if (*encoded) {
             strjson_str(request, "count", encoded);
@@ -333,6 +330,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, count_min),
+                            0,
+                            1,
                             encoded);
         if (*encoded) {
             strjson_str(request, "count_min", encoded);
@@ -341,6 +340,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, count_max),
+                            0,
+                            1,
                             encoded);
         if (*encoded) {
             strjson_str(request, "count_max", encoded);
@@ -349,6 +350,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, temperature),
+                            1,
+                            10,
                             encoded);
         if (*encoded) {
             strjson_str(request, "temp", encoded);
@@ -357,6 +360,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, humidity),
+                            0,
+                            10,
                             encoded);
         if (*encoded) {
             strjson_str(request, "hum", encoded);
@@ -365,6 +370,8 @@ static void build_data_payload(char* request,
         sensor_field_encode(records,
                             record_count,
                             offsetof(struct sensor_record, angle),
+                            0,
+                            10,
                             encoded);
         if (*encoded) {
             strjson_str(request, "angle", encoded);
@@ -384,7 +391,7 @@ void task_net(void* argument) {
     char url[PARAMS_APP_URL_SIZE + 32];
     char hmac[HMAC_BASE64_LEN];
     char request_body[512];
-    mqueue_t* queue = sensors_queue();
+    struct sensorq* queue = task_ctx->queue;
 
     struct net_ctx ctx = {
         .logger = task_ctx->logger,
@@ -464,15 +471,17 @@ void task_net(void* argument) {
             }
         }
 
-        /* If send failed, data is already consumed from queue — log it */
-        if (!sent) {
+        /* Drop records from queue only after successful send */
+        if (sent) {
+            sensorq_drop(queue, record_count);
+        } else {
 #ifdef LOGGER
             logger_add_str(ctx.logger, TAG, false, "data send failed");
 #endif
         }
 
         /* If more data in queue, loop immediately */
-        if (!mqueue_is_empty(queue)) {
+        if (!sensorq_is_empty(queue)) {
             continue;
         }
     }
