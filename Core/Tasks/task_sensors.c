@@ -11,10 +11,10 @@
 #include "avoltage.h"
 #include "counter.h"
 #include "logger.h"
-#include "mqueue.h"
 #include "params.h"
 #include "ptasks.h"
 #include "rtctime.h"
+#include "sensorq.h"
 #ifdef LOGGER
 #    define TAG "SENSORS"
 #endif
@@ -22,9 +22,7 @@
 static struct task_sensors_ctx* s_ctx;
 
 //#define AVOLTAGE_CALIB
-#define ANGLE_MAX            360000
-#define SENSORS_QUEUE_SECNUM 48
-
+#define ANGLE_MAX 360000
 enum {
     AVAIL_VOL    = 0x01,
     AVAIL_CNT    = 0x02,
@@ -43,12 +41,6 @@ enum {
     DRDY_ANG  = 0x20,
 };
 
-static mqueue_t* queue;
-
-mqueue_t* sensors_queue(void) {
-    return queue;
-}
-
 void task_sensors(void* argument) {
     struct task_sensors_ctx* ctx = argument;
     int avail                    = 0;
@@ -65,9 +57,6 @@ void task_sensors(void* argument) {
     char* tmp;
 
     s_ctx = ctx;
-
-    /* Create sensor record queue */
-    queue = mqueue_create(SENSORS_QUEUE_SECNUM, sizeof(struct sensor_record));
 
     /* Check sensor availability */
 #ifdef AVOLTAGE_CALIB
@@ -172,24 +161,24 @@ void task_sensors(void* argument) {
             memset(&rec, 0, sizeof(rec));
             rec.timestamp = ts;
             if (drdy & DRDY_VOL) {
-                rec.voltage = voltage;
+                rec.voltage = (uint16_t)voltage;
             }
             if (drdy & DRDY_TMP) {
-                rec.temperature = temperature;
+                rec.temperature = (int16_t)(temperature / 10);
             }
             if (drdy & DRDY_HUM) {
-                rec.humidity = humidity;
+                rec.humidity = (uint16_t)(humidity / 10);
             }
             if (drdy & DRDY_ANG) {
-                rec.angle = angle_wo;
+                rec.angle = (uint16_t)(angle_wo / 10);
             }
 
             counter_accum_read(ctx->cnt, &ca);
-            rec.count_avg = ca.avg;
-            rec.count_min = ca.min;
-            rec.count_max = ca.max;
+            rec.count_avg = (uint16_t)ca.avg;
+            rec.count_min = (uint16_t)ca.min;
+            rec.count_max = (uint16_t)ca.max;
 
-            mqueue_set(queue, &rec);
+            sensorq_push(ctx->queue, &rec);
         }
 
         xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_DONE);

@@ -44,6 +44,7 @@
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
+#include "sensorq.h"
 #include "siface.h"
 #include "sim800l.h"
 #include "spi.h"
@@ -97,6 +98,8 @@ struct button btn;
 struct siface siface;
 struct sim800l modem;
 struct w25q_s mem;
+static struct sensorq sensorq;
+static struct sensor_record sensorq_buf[SENSORS_QUEUE_CAPACITY];
 #ifdef LOGGER
 struct logger logger;
 #endif
@@ -216,8 +219,10 @@ void pm_flash_exit_stop(void) {
 /* Task context instances                                                    */
 /*---------------------------------------------------------------------------*/
 
-struct task_default_ctx task_default_ctx = {0};
-struct task_blink_ctx task_blink_ctx     = {0};
+struct task_default_ctx task_default_ctx = {
+    .queue = &sensorq,
+};
+struct task_blink_ctx task_blink_ctx = {0};
 
 struct task_button_ctx task_button_ctx = {
     .btn = &btn,
@@ -232,10 +237,11 @@ struct task_anemometer_ctx task_anemometer_ctx = {
 };
 
 struct task_sensors_ctx task_sensors_ctx = {
-    .pot  = &pot,
-    .aht  = &aht,
-    .avlt = &avlt,
-    .cnt  = &cnt,
+    .queue = &sensorq,
+    .pot   = &pot,
+    .aht   = &aht,
+    .avlt  = &avlt,
+    .cnt   = &cnt,
 #ifdef LOGGER
     .logger = &logger,
 #endif
@@ -267,6 +273,7 @@ struct task_logging_ctx task_logging_ctx = {
 };
 
 struct task_net_ctx task_net_ctx = {
+    .queue = &sensorq,
 #ifdef LOGGER
     .logger = &logger,
 #endif
@@ -437,8 +444,7 @@ int main(void) {
     counter_init(&cnt);
     avoltage_init(&avlt, &hadc1, 2);
 
-    //
-    mqueue_init(&mem);
+    sensorq_init(&sensorq, sensorq_buf, SENSORS_QUEUE_CAPACITY);
 
     // Flash power-down in Stop mode
     HAL_PWREx_EnableFlashPowerDown();
