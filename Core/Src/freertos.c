@@ -407,11 +407,10 @@ void MX_FREERTOS_Init(void) {
   */
 /* USER CODE END Header_task_default */
 void task_default(void* argument) {
-    struct task_default_ctx* ctx = argument;
     /* init code for USB_DEVICE */
     MX_USB_DEVICE_Init();
     /* USER CODE BEGIN task_default */
-
+    struct task_default_ctx* ctx = argument;
     task_manager_run(ctx->queue);
 
     /* USER CODE END task_default */
