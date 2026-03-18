@@ -418,9 +418,9 @@ void task_net(void* argument) {
     }
 
     /* 2. Send station info → /api/info */
-    xSemaphoreTake(actual.mutex, portMAX_DELAY);
-    int available_sensors = actual.avail;
-    xSemaphoreGive(actual.mutex);
+    xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
+    int available_sensors = task_ctx->actual->avail;
+    xSemaphoreGive(task_ctx->actual->mutex);
 
     build_info_payload(request_body, available_sensors);
     request_post(&ctx, "/api/info");
@@ -450,9 +450,9 @@ void task_net(void* argument) {
         }
 
         /* Read voltage */
-        xSemaphoreTake(actual.mutex, portMAX_DELAY);
-        int voltage = actual.voltage;
-        xSemaphoreGive(actual.mutex);
+        xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
+        int voltage = task_ctx->actual->voltage;
+        xSemaphoreGive(task_ctx->actual->mutex);
 
         /* Read sensor records from queue */
         struct sensor_record records[MAX_RECORDS_PER_BATCH];

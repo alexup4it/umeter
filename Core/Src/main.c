@@ -90,18 +90,19 @@ extern const uint32_t* _app;
 #define APP_ADDRESS ((uint32_t)&_app)
 
 /* Hardware instances */
-struct as5600 pot;
-struct aht20 aht;
-struct counter cnt;
-struct avoltage avlt;
-struct button btn;
-struct siface siface;
-struct sim800l modem;
-struct w25q_s mem;
+static struct actual actual;
+static struct as5600 pot;
+static struct aht20 aht;
+static struct counter cnt;
+static struct avoltage avlt;
+static struct button btn;
+static struct siface siface;
+static struct sim800l modem;
+static struct w25q_s mem;
 static struct sensorq sensorq;
 static struct sensor_record sensorq_buf[SENSORS_QUEUE_CAPACITY];
 #ifdef LOGGER
-struct logger logger;
+static struct logger logger;
 #endif
 
 /* USER CODE END PV */
@@ -223,28 +224,32 @@ void pm_flash_exit_stop(void) {
 /*---------------------------------------------------------------------------*/
 
 struct task_default_ctx task_default_ctx = {
-    .queue = &sensorq,
+    .logger  = &logger,
+    .sensorq = &sensorq,
 };
 struct task_blink_ctx task_blink_ctx = {0};
 
 struct task_button_ctx task_button_ctx = {
-    .btn = &btn,
+    .actual = &actual,
+    .btn    = &btn,
 };
 
 struct task_watchdog_ctx task_watchdog_ctx = {0};
 
 struct task_anemometer_ctx task_anemometer_ctx = {
+    .actual         = &actual,
     .cnt            = &cnt,
     .anemometer_on  = pm_anemometer_on,
     .anemometer_off = pm_anemometer_off,
 };
 
 struct task_sensors_ctx task_sensors_ctx = {
-    .queue = &sensorq,
-    .pot   = &pot,
-    .aht   = &aht,
-    .avlt  = &avlt,
-    .cnt   = &cnt,
+    .actual = &actual,
+    .queue  = &sensorq,
+    .pot    = &pot,
+    .aht    = &aht,
+    .avlt   = &avlt,
+    .cnt    = &cnt,
 #ifdef LOGGER
     .logger = &logger,
 #endif
@@ -257,6 +262,7 @@ struct task_sensors_ctx task_sensors_ctx = {
 };
 
 struct task_modem_ctx task_modem_ctx = {
+    .actual    = &actual,
     .modem     = &modem,
     .power_on  = pm_modem_on,
     .power_off = pm_modem_off,
@@ -276,7 +282,8 @@ struct task_logging_ctx task_logging_ctx = {
 };
 
 struct task_net_ctx task_net_ctx = {
-    .queue = &sensorq,
+    .actual = &actual,
+    .queue  = &sensorq,
 #ifdef LOGGER
     .logger = &logger,
 #endif
@@ -423,9 +430,10 @@ int main(void) {
     params_init();
 
     //
-    actual_init();
+    actual_init(&actual);
 
     //
+    appif.actual  = &actual;
     appif.uparams = params;
 
     //

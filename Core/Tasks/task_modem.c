@@ -27,6 +27,7 @@
 #define IDLE_POWER_OFF_MS 500
 
 struct modem_ctx {
+    struct actual* actual;
     struct sim800l* modem;
     struct logger* logger;
     void (*power_on)(void);
@@ -74,9 +75,9 @@ static int modem_ensure_ready(struct modem_ctx* ctx) {
     }
 
     /* Check battery voltage */
-    xSemaphoreTake(actual.mutex, portMAX_DELAY);
-    int voltage = actual.voltage;
-    xSemaphoreGive(actual.mutex);
+    xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
+    int voltage = ctx->actual->voltage;
+    xSemaphoreGive(ctx->actual->mutex);
 
     if (voltage < VOLTAGE_MIN_MV) {
 #ifdef LOGGER
@@ -207,6 +208,7 @@ void task_modem(void* argument) {
     struct modem_request request;
 
     struct modem_ctx ctx = {
+        .actual    = task_ctx->actual,
         .modem     = task_ctx->modem,
         .logger    = task_ctx->logger,
         .power_on  = task_ctx->power_on,

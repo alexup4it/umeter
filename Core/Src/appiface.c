@@ -133,29 +133,29 @@ static int parse(struct appiface* appif, const char* request, char* response) {
         } else if (jsoneq(request, tparam, "mtime_count") == 0) {
             strjson_uint(response, "mtime_count", appif->uparams.mtime_count);
         } else if (jsoneq(request, tparam, "sens") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_int(response, "sens", actual.avail);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_int(response, "sens", appif->actual->avail);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "bat") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_uint(response, "bat", actual.voltage);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_uint(response, "bat", appif->actual->voltage);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "count") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_uint(response, "count", actual.count);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_uint(response, "count", appif->actual->count);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "temp") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_int(response, "temp", actual.temperature);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_int(response, "temp", appif->actual->temperature);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "hum") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_int(response, "hum", actual.humidity);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_int(response, "hum", appif->actual->humidity);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "angle") == 0) {
-            xSemaphoreTake(actual.mutex, portMAX_DELAY);
-            strjson_int(response, "angle", actual.angle);
-            xSemaphoreGive(actual.mutex);
+            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            strjson_int(response, "angle", appif->actual->angle);
+            xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "tamper") == 0) {
             return -1;  // TODO
         } else {

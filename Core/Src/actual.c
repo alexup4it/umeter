@@ -6,9 +6,7 @@
 
 #include <string.h>
 
-struct actual actual;
-
-void actual_init(void) {
-    memset(&actual, 0, sizeof(actual));
-    actual.mutex = xSemaphoreCreateMutex();
+void actual_init(struct actual* a) {
+    memset(a, 0, sizeof(*a));
+    a->mutex = xSemaphoreCreateMutex();
 }

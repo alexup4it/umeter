@@ -2,6 +2,10 @@
  * Task manager (scheduler pipeline)
  */
 
+#include <stdlib.h>
+#include <string.h>
+
+#include "logger.h"
 #include "params.h"
 #include "ptasks.h"
 #include "rtctime.h"
@@ -17,7 +21,7 @@ void task_manager_init(void) {
     task_events = xEventGroupCreate();
 }
 
-void task_manager_run(struct sensorq* sensorq) {
+void task_manager_run(struct task_default_ctx* ctx) {
     uint32_t tick   = 0;
     TickType_t wake = xTaskGetTickCount();
 
@@ -64,14 +68,13 @@ void task_manager_run(struct sensorq* sensorq) {
 
         rtctime_read();
 
-        tick++;
-
         int do_cnt = cnt_every && (tick % cnt_every == 0);
         int do_app = app_every && (tick % app_every == 0);
 
         /* Adaptive sensor interval: slow down when queue is backing up */
         uint32_t sen_cur = sen_every;
-        if (sensorq && sensorq_count(sensorq) > SENSORQ_BACKLOG_THRESHOLD) {
+        if (ctx->sensorq &&
+            sensorq_count(ctx->sensorq) > SENSORQ_BACKLOG_THRESHOLD) {
             sen_cur = sen_slow_every;
         }
         int do_sen = sen_cur && (tick % sen_cur == 0);
@@ -99,5 +102,7 @@ void task_manager_run(struct sensorq* sensorq) {
         if (do_app) {
             xEventGroupSetBits(task_events, TASK_EVENT_NET_START);
         }
+
+        tick++;
     }
 }

@@ -12,13 +12,13 @@
 
 static TaskHandle_t s_button_task_handle;
 
-static void save_angle_from_actual(void) {
+static void save_angle_from_actual(struct actual* actual) {
     int32_t angle;
     params_t uparams;
 
-    xSemaphoreTake(actual.mutex, portMAX_DELAY);
-    angle = actual.angle;
-    xSemaphoreGive(actual.mutex);
+    xSemaphoreTake(actual->mutex, portMAX_DELAY);
+    angle = actual->angle;
+    xSemaphoreGive(actual->mutex);
 
     if (angle < 0) {
         return;
@@ -50,8 +50,6 @@ void task_button(void* argument) {
     struct task_button_ctx* ctx = argument;
     uint32_t notifications;
 
-    (void)ctx;
-
     s_button_task_handle = xTaskGetCurrentTaskHandle();
 
     for (;;) {
@@ -65,7 +63,7 @@ void task_button(void* argument) {
                                 pdFALSE,
                                 portMAX_DELAY);
 
-            save_angle_from_actual();
+            save_angle_from_actual(ctx->actual);
         }
     }
 }

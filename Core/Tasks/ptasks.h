@@ -10,6 +10,7 @@
 #include "FreeRTOS.h"
 #include "cmsis_os.h"
 #include "event_groups.h"
+#include "ptasks.h"
 #include "task.h"
 
 extern EventGroupHandle_t task_events;
@@ -30,11 +31,6 @@ extern EventGroupHandle_t task_events;
 void task_manager_init(void);
 
 struct sensorq;
-
-/**
- * Run the scheduling loop (never returns).
- */
-void task_manager_run(struct sensorq* sensorq);
 
 struct sensor_record {
     uint32_t timestamp;
@@ -73,11 +69,13 @@ struct siface;
 struct sim800l;
 struct w25q_s;
 struct logger;
+struct actual;
 
 typedef void (*pm_fn)(void);
 
 struct task_default_ctx {
-    struct sensorq* queue;
+    struct logger* logger;
+    struct sensorq* sensorq;
 };
 
 struct task_blink_ctx {
@@ -85,6 +83,7 @@ struct task_blink_ctx {
 };
 
 struct task_button_ctx {
+    struct actual* actual;
     struct button* btn;
 };
 
@@ -93,12 +92,14 @@ struct task_watchdog_ctx {
 };
 
 struct task_anemometer_ctx {
+    struct actual* actual;
     struct counter* cnt;
     pm_fn anemometer_on;
     pm_fn anemometer_off;
 };
 
 struct task_sensors_ctx {
+    struct actual* actual;
     struct sensorq* queue;
     struct as5600* pot;
     struct aht20* aht;
@@ -114,6 +115,7 @@ struct task_sensors_ctx {
 };
 
 struct task_modem_ctx {
+    struct actual* actual;
     struct sim800l* modem;
     struct logger* logger;
     pm_fn power_on;
@@ -129,6 +131,7 @@ struct task_logging_ctx {
 };
 
 struct task_net_ctx {
+    struct actual* actual;
     struct sensorq* queue;
     struct logger* logger;
 };
@@ -137,6 +140,11 @@ struct task_ota_ctx {
     struct w25q_s* mem;
     struct logger* logger;
 };
+
+/**
+ * Run the scheduling loop (never returns).
+ */
+void task_manager_run(struct task_default_ctx* ctx);
 
 /*---------------------------------------------------------------------------*/
 /* Modem request interface (task_modem ↔ task_net / task_ota)                */

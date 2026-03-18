@@ -20,8 +20,6 @@ struct actual {
     int32_t temperature;
 };
 
-extern struct actual actual;
-
-void actual_init(void);
+void actual_init(struct actual* a);
 
 #endif /* ACTUAL_H_ */

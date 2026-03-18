@@ -410,8 +410,7 @@ void task_default(void* argument) {
     /* init code for USB_DEVICE */
     MX_USB_DEVICE_Init();
     /* USER CODE BEGIN task_default */
-    struct task_default_ctx* ctx = argument;
-    task_manager_run(ctx->queue);
+    task_manager_run(argument);
 
     /* USER CODE END task_default */
 }

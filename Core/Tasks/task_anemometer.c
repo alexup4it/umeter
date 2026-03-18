@@ -58,9 +58,9 @@ void task_anemometer(void* argument) {
         ctx->anemometer_off();
 
         /* Update actual value */
-        xSemaphoreTake(actual.mutex, portMAX_DELAY);
-        actual.count = value;
-        xSemaphoreGive(actual.mutex);
+        xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
+        ctx->actual->count = value;
+        xSemaphoreGive(ctx->actual->mutex);
 
         /* Update accumulator for min/avg/max aggregation */
         counter_accum_update(ctx->cnt, value);

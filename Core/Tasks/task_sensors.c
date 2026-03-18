@@ -81,9 +81,9 @@ void task_sensors(void* argument) {
         avail |= AVAIL_AS5600;
     }
 
-    xSemaphoreTake(actual.mutex, portMAX_DELAY);
-    actual.avail = avail;
-    xSemaphoreGive(actual.mutex);
+    xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
+    ctx->actual->avail = avail;
+    xSemaphoreGive(ctx->actual->mutex);
 
 #ifdef LOGGER
     tmp = pvPortMalloc(sizeof(avail) * 8 + 2);
@@ -139,20 +139,20 @@ void task_sensors(void* argument) {
 
         ts = timestamp;
 
-        xSemaphoreTake(actual.mutex, portMAX_DELAY);
+        xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
         if (drdy & DRDY_VOL) {
-            actual.voltage = voltage;
+            ctx->actual->voltage = voltage;
         }
         if (drdy & DRDY_TMP) {
-            actual.temperature = temperature;
+            ctx->actual->temperature = temperature;
         }
         if (drdy & DRDY_HUM) {
-            actual.humidity = humidity;
+            ctx->actual->humidity = humidity;
         }
         if (drdy & DRDY_ANG) {
-            actual.angle = angle_wo;
+            ctx->actual->angle = angle_wo;
         }
-        xSemaphoreGive(actual.mutex);
+        xSemaphoreGive(ctx->actual->mutex);
 
         {
             struct sensor_record rec;
