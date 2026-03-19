@@ -88,7 +88,7 @@ const osThreadAttr_t blink_attributes = {
 osThreadId_t buttonHandle;
 const osThreadAttr_t button_attributes = {
     .name       = "button",
-    .stack_size = 64 * 4,
+    .stack_size = 128 * 4,
     .priority   = (osPriority_t)osPriorityBelowNormal,
 };
 /* Definitions for logging */
@@ -144,7 +144,7 @@ const osThreadAttr_t watchdog_attributes = {
 osThreadId_t netHandle;
 const osThreadAttr_t net_attributes = {
     .name       = "net",
-    .stack_size = 512 * 4,
+    .stack_size = 768 * 4,
     .priority   = (osPriority_t)osPriorityNormal,
 };
 

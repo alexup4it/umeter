@@ -34,10 +34,13 @@ void sim800l_init(struct sim800l* self,
 void sim800l_irq(struct sim800l* self, size_t length) {
     BaseType_t woken = pdFALSE;
     xStreamBufferSendFromISR(self->stream, self->dma_buffer, length, &woken);
+    portYIELD_FROM_ISR(woken);
 }
 
 static void clear_rx(struct sim800l* self) {
+    taskENTER_CRITICAL();
     xStreamBufferReset(self->stream);
+    taskEXIT_CRITICAL();
     self->rx_length    = 0;
     self->rx_current   = self->rx_buffer;
     self->rx_buffer[0] = '\0';
@@ -60,8 +63,36 @@ static void transmit(struct sim800l* self, const char* data) {
 
     clear_rx(self);
     while (
-        HAL_UART_Transmit_DMA(self->uart, self->tx_buffer, length) == HAL_BUSY
+        HAL_UART_Transmit_DMA(self->uart, (uint8_t*)self->tx_buffer, length) ==
+        HAL_BUSY
     );
+}
+
+/**
+ * Receive more data from stream buffer into rx_buffer.
+ * @return true if data was received, false on buffer full or timeout
+ */
+static bool poll_rx(struct sim800l* self, TickType_t remaining_ticks) {
+    if (self->rx_length >= SIM800L_BUFFER_SIZE) {
+        return false;
+    }
+
+    uint8_t* dest = (uint8_t*)self->rx_buffer + self->rx_length;
+    size_t received =
+        xStreamBufferReceive(self->stream,
+                             dest,
+                             SIM800L_BUFFER_SIZE - self->rx_length,
+                             remaining_ticks);
+    self->rx_length += received;
+    self->rx_buffer[self->rx_length] = '\0';
+
+#ifdef LOGGER
+    if (received) {
+        logger_add(self->logger, TAG, false, (char*)dest, received);
+    }
+#endif
+
+    return received > 0;
 }
 
 /**
@@ -77,6 +108,11 @@ static char* read_to(struct sim800l* self,
     char* result                   = NULL;
 
     for (;;) {
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            break;
+        }
+
         char* found = strstr(self->rx_current, substr);
         if (found) {
             found[0] = '\0';
@@ -86,29 +122,9 @@ static char* read_to(struct sim800l* self,
             break;
         }
 
-        const TickType_t elapsed = xTaskGetTickCount() - started_at;
-        if (elapsed >= timeout_ticks) {
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
             break;
         }
-
-        if (self->rx_length >= SIM800L_BUFFER_SIZE) {
-            break;
-        }
-
-        uint8_t* dest = self->rx_buffer + self->rx_length;
-        size_t received =
-            xStreamBufferReceive(self->stream,
-                                 dest,
-                                 SIM800L_BUFFER_SIZE - self->rx_length,
-                                 timeout_ticks - elapsed);
-        self->rx_length += received;
-        self->rx_buffer[self->rx_length] = '\0';
-
-#ifdef LOGGER
-        if (received) {
-            logger_add(self->logger, TAG, false, (char*)dest, received);
-        }
-#endif
     }
 
     return result;
@@ -117,41 +133,27 @@ static char* read_to(struct sim800l* self,
 static char* read_n(struct sim800l* self, const uint32_t timeout_ms, size_t n) {
     const TickType_t started_at    = xTaskGetTickCount();
     const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    char* result                   = NULL;
 
     for (;;) {
-        size_t available = self->rx_buffer + self->rx_length - self->rx_current;
-        if (available >= n) {
-            char* result = self->rx_current;
-            self->rx_current += n;
-            return result;
-        }
-
         const TickType_t elapsed = xTaskGetTickCount() - started_at;
         if (elapsed >= timeout_ticks) {
             break;
         }
 
-        if (self->rx_length >= SIM800L_BUFFER_SIZE) {
+        size_t available = self->rx_buffer + self->rx_length - self->rx_current;
+        if (available >= n) {
+            result = self->rx_current;
+            self->rx_current += n;
             break;
         }
 
-        uint8_t* dest = self->rx_buffer + self->rx_length;
-        size_t received =
-            xStreamBufferReceive(self->stream,
-                                 dest,
-                                 SIM800L_BUFFER_SIZE - self->rx_length,
-                                 timeout_ticks - elapsed);
-        self->rx_length += received;
-        self->rx_buffer[self->rx_length] = '\0';
-
-#ifdef LOGGER
-        if (received) {
-            logger_add(self->logger, TAG, false, (char*)dest, received);
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
+            break;
         }
-#endif
     }
 
-    return NULL;
+    return result;
 }
 
 /**
@@ -164,6 +166,11 @@ static bool wait_for_ok(struct sim800l* self, const uint32_t timeout_ms) {
     bool found_ok                  = false;
 
     for (;;) {
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            break;
+        }
+
         if (strstr((char*)self->rx_buffer, "OK")) {
             found_ok = true;
             break;
@@ -173,29 +180,9 @@ static bool wait_for_ok(struct sim800l* self, const uint32_t timeout_ms) {
             break;
         }
 
-        const TickType_t elapsed = xTaskGetTickCount() - started_at;
-        if (elapsed >= timeout_ticks) {
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
             break;
         }
-
-        if (self->rx_length >= SIM800L_BUFFER_SIZE) {
-            break;
-        }
-
-        uint8_t* dest = self->rx_buffer + self->rx_length;
-        size_t received =
-            xStreamBufferReceive(self->stream,
-                                 dest,
-                                 SIM800L_BUFFER_SIZE - self->rx_length,
-                                 timeout_ticks - elapsed);
-        self->rx_length += received;
-        self->rx_buffer[self->rx_length] = '\0';
-
-#ifdef LOGGER
-        if (received) {
-            logger_add(self->logger, TAG, false, (char*)dest, received);
-        }
-#endif
     }
 
     return found_ok;
@@ -333,13 +320,13 @@ static int parse_http_action(struct sim800l* self,
         return -1;
     }
 
-    int status = strtoul(p, &p, 10);
+    int status = (int)strtoul(p, &p, 10);
     if (*p != ',' || !*(++p)) {
         return -1;
     }
 
     if (data_length) {
-        *data_length = strtoul(p, NULL, 10);
+        *data_length = (int)strtoul(p, NULL, 10);
     }
 
     return status;
@@ -355,8 +342,8 @@ static char* parse_http_head_authorization(struct sim800l* self,
         return NULL;
     }
 
-    int length   = strlen(p) + 1;
-    char* result = pvPortMalloc(length);
+    size_t length = strlen(p) + 1;
+    char* result  = pvPortMalloc(length);
     if (!result) {
         return NULL;
     }
@@ -366,7 +353,10 @@ static char* parse_http_head_authorization(struct sim800l* self,
 }
 
 /* Parse HTTPREAD response body.
- * Returns allocated body and sets *out_length, or NULL on failure. */
+ * Returns allocated body and sets *out_length, or NULL on failure.
+ *
+ * +HTTPREAD: <data_len>\r\n<data>\r\nOK\r\n
+ */
 static char* parse_http_read(struct sim800l* self,
                              size_t* out_length,
                              uint32_t timeout_ms) {
@@ -377,15 +367,7 @@ static char* parse_http_read(struct sim800l* self,
         return NULL;
     }
 
-    int length = strtoul(p, &p, 10);
-    if (!*p) {
-        return NULL;
-    }
-
-    read_to(self, timeout_ms, "\r\n");
-    if (!p) {
-        return NULL;
-    }
+    size_t length = (size_t)strtoul(p, NULL, 10);
 
     p = read_n(self, timeout_ms, length);
     if (!p) {
@@ -434,7 +416,7 @@ static int http_setup(struct sim800l* self,
 
         strcpy(cmd, "AT+HTTPDATA=");
         utoa(strlen(body), &cmd[strlen(cmd)], 10);
-        strcat(cmd, ",1000");
+        strcat(cmd, ",5000");
         transmit(self, cmd);
         if (!read_to(self, 1000, "DOWNLOAD")) {
             return -1;
@@ -479,7 +461,7 @@ static int http_execute(struct sim800l* self,
         /* Read authorization header if requested */
         if (read_auth) {
             transmit(self, "AT+HTTPHEAD");
-            response->authorization = parse_http_head_authorization(self, 1000);
+            response->authorization = parse_http_head_authorization(self, 5000);
         }
 
         /* Read response body */
@@ -541,7 +523,7 @@ static int32_t get_param_value(const char* line, const char* param, int base) {
         return -1;
     }
 
-    return strtoul(p, NULL, base);
+    return (int32_t)strtoul(p, NULL, base);
 }
 
 int sim800l_netscan(struct sim800l* self,

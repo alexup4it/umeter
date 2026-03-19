@@ -195,7 +195,7 @@ static void pm_avoltage_on(void) {
 }
 
 static void pm_avoltage_off(void) {
-    HAL_ADC_MspDeInit(&hadc1);
+    HAL_ADC_DeInit(&hadc1);
     HAL_GPIO_WritePin(VBAT_MEAS_EN_GPIO_Port, VBAT_MEAS_EN_Pin, GPIO_PIN_RESET);
 }
 
@@ -323,6 +323,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart) {
     if (huart == &huart2) {
+        HAL_UART_AbortReceive(huart);
         HAL_UARTEx_ReceiveToIdle_DMA(modem.uart,
                                      (uint8_t*)modem.dma_buffer,
                                      SIM800L_UART_BUFFER_SIZE);
@@ -463,9 +464,7 @@ int main(void) {
     /* USER CODE END 2 */
 
     /* Init scheduler */
-    osKernelInitialize();
-
-    /* Call init function for freertos objects (in cmsis_os2.c) */
+    osKernelInitialize(); /* Call init function for freertos objects (in cmsis_os2.c) */
     MX_FREERTOS_Init();
 
     /* Start scheduler */
@@ -564,7 +563,6 @@ void Error_Handler(void) {
     while (1) {}
     /* USER CODE END Error_Handler_Debug */
 }
-
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number

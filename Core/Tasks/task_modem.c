@@ -88,7 +88,7 @@ static int modem_ensure_ready(struct modem_ctx* ctx) {
 
     modem_power_on(ctx);
 
-    if (!sim800l_startup(ctx->modem)) {
+    if (sim800l_startup(ctx->modem) != 0) {
 #ifdef LOGGER
         logger_add_str(ctx->logger, TAG, false, "startup failed");
 #endif
@@ -96,7 +96,7 @@ static int modem_ensure_ready(struct modem_ctx* ctx) {
         return -1;
     }
 
-    if (!sim800l_wait_network(ctx->modem, NETWORK_TIMEOUT_MS)) {
+    if (sim800l_wait_network(ctx->modem, NETWORK_TIMEOUT_MS) != 0) {
 #ifdef LOGGER
         logger_add_str(ctx->logger, TAG, false, "no network");
 #endif

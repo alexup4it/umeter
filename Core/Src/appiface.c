@@ -55,7 +55,10 @@ static int hextostr(const char* hexstr,
     return 0;
 }
 
-static int parse(struct appiface* appif, const char* request, char* response) {
+static int parse(struct appiface* appif,
+                 const char* request,
+                 char* response,
+                 size_t resp_size) {
     jsmn_parser parser;
     jsmntok_t tokens[JSON_MAX_TOKENS];
     jsmntok_t* tcmd   = NULL;
@@ -96,65 +99,77 @@ static int parse(struct appiface* appif, const char* request, char* response) {
     }
 
     if (jsoneq(request, tcmd, "iface") == 0) {
-        strjson_str(response, "iface", APPIFACE_KEY);
+        strjson_str(response, resp_size, "iface", APPIFACE_KEY);
     } else if (jsoneq(request, tcmd, "rd_param") == 0) {
         if (!tparam) {
             return -1;
         }
 
         if (jsoneq(request, tparam, "uid") == 0) {
-            strjson_uint(response, "uid", params.id);
+            strjson_uint(response, resp_size, "uid", params.id);
         } else if (jsoneq(request, tparam, "ts") == 0) {
-            strjson_uint(response, "ts", timestamp);
+            strjson_uint(response, resp_size, "ts", timestamp);
         } else if (jsoneq(request, tparam, "ticks") == 0) {
-            strjson_uint(response, "ticks", xTaskGetTickCount());
+            strjson_uint(response, resp_size, "ticks", xTaskGetTickCount());
         } else if (jsoneq(request, tparam, "name") == 0) {
-            strjson_str(response, "name", PARAMS_DEVICE_NAME);
+            strjson_str(response, resp_size, "name", PARAMS_DEVICE_NAME);
         } else if (jsoneq(request, tparam, "bl_git") == 0) {
-            strjson_str(response, "bl_git", (char*)bl.hash);
+            strjson_str(response, resp_size, "bl_git", (char*)bl.hash);
         } else if (jsoneq(request, tparam, "bl_status") == 0) {
-            strjson_uint(response, "bl_status", bl.status);
+            strjson_uint(response, resp_size, "bl_status", bl.status);
         } else if (jsoneq(request, tparam, "app_git") == 0) {
-            strjson_str(response, "app_git", GIT_COMMIT_HASH);
+            strjson_str(response, resp_size, "app_git", GIT_COMMIT_HASH);
         } else if (jsoneq(request, tparam, "app_ver") == 0) {
-            strjson_uint(response, "app_ver", PARAMS_FW_VERSION);
+            strjson_uint(response, resp_size, "app_ver", PARAMS_FW_VERSION);
         } else if (jsoneq(request, tparam, "mcu") == 0) {
-            strjson_str(response, "mcu", params.mcu_uid);
+            strjson_str(response, resp_size, "mcu", params.mcu_uid);
         } else if (jsoneq(request, tparam, "apn") == 0) {
-            strjson_str(response, "apn", appif->uparams.apn);
+            strjson_str(response, resp_size, "apn", appif->uparams.apn);
         } else if (jsoneq(request, tparam, "url_ota") == 0) {
-            strjson_str(response, "url_ota", appif->uparams.url_ota);
+            strjson_str(response, resp_size, "url_ota", appif->uparams.url_ota);
         } else if (jsoneq(request, tparam, "url_app") == 0) {
-            strjson_str(response, "url_app", appif->uparams.url_app);
+            strjson_str(response, resp_size, "url_app", appif->uparams.url_app);
         } else if (jsoneq(request, tparam, "period_app") == 0) {
-            strjson_uint(response, "period_app", appif->uparams.period_app);
+            strjson_uint(response,
+                         resp_size,
+                         "period_app",
+                         appif->uparams.period_app);
         } else if (jsoneq(request, tparam, "period_sen") == 0) {
-            strjson_uint(response, "period_sen", appif->uparams.period_sen);
+            strjson_uint(response,
+                         resp_size,
+                         "period_sen",
+                         appif->uparams.period_sen);
         } else if (jsoneq(request, tparam, "mtime_count") == 0) {
-            strjson_uint(response, "mtime_count", appif->uparams.mtime_count);
+            strjson_uint(response,
+                         resp_size,
+                         "mtime_count",
+                         appif->uparams.mtime_count);
         } else if (jsoneq(request, tparam, "sens") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, "sens", appif->actual->avail);
+            strjson_int(response, resp_size, "sens", appif->actual->avail);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "bat") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_uint(response, "bat", appif->actual->voltage);
+            strjson_uint(response, resp_size, "bat", appif->actual->voltage);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "count") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_uint(response, "count", appif->actual->count);
+            strjson_uint(response, resp_size, "count", appif->actual->count);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "temp") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, "temp", appif->actual->temperature);
+            strjson_int(response,
+                        resp_size,
+                        "temp",
+                        appif->actual->temperature);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "hum") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, "hum", appif->actual->humidity);
+            strjson_int(response, resp_size, "hum", appif->actual->humidity);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "angle") == 0) {
             xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, "angle", appif->actual->angle);
+            strjson_int(response, resp_size, "angle", appif->actual->angle);
             xSemaphoreGive(appif->actual->mutex);
         } else if (jsoneq(request, tparam, "tamper") == 0) {
             return -1;  // TODO
@@ -242,7 +257,7 @@ static int parse(struct appiface* appif, const char* request, char* response) {
         NVIC_SystemReset();  // --> RESET
     }
 
-    strjson_str(response, "status", "ok");
+    strjson_str(response, resp_size, "status", "ok");
     return 0;
 }
 
@@ -259,12 +274,13 @@ int appiface(void* iface) {
     }
 
     strcpy(tmp, "@,,");
-    response = tmp + strlen(tmp);
-    strjson_init(response);
+    response         = tmp + strlen(tmp);
+    size_t resp_size = 256 - strlen(tmp);
+    strjson_init(response, resp_size);
 
-    ret = parse(appif, siface->buf, response);
+    ret = parse(appif, siface->buf, response, resp_size);
     if (ret < 0) {
-        strjson_str(response, "status", "error");
+        strjson_str(response, resp_size, "status", "error");
     }
 
     strcat(response, "\r\n");

@@ -8,8 +8,8 @@
 #ifndef APPIFACE_H_
 #define APPIFACE_H_
 
-#include "params.h"
 #include "actual.h"
+#include "params.h"
 
 struct appiface {
     struct actual* actual;

@@ -1,86 +1,145 @@
 /*
  * String JSON
  *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024
+ * Every mutating function checks the remaining buffer space before writing.
+ * On overflow the JSON string stays unchanged and the function returns -1.
  */
 
 #include "strjson.h"
 
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /******************************************************************************/
-void strjson_init(char* json) {
-    strcpy(json, "{}");
+void strjson_init(char* json, size_t size) {
+    if (size < 3) {
+        if (size > 0) {
+            json[0] = '\0';
+        }
+        return;
+    }
+    json[0] = '{';
+    json[1] = '}';
+    json[2] = '\0';
 }
 
-// {"name": or ,"name":
-static int add_name(char* json, const char* name) {
+/*
+ * Prepare a write position: find the trailing '}', return its offset and
+ * whether a separating comma is needed.  Returns -1 when the buffer is in
+ * an unexpected state.
+ */
+static int field_start(const char* json, size_t* pos, int* need_comma) {
     size_t len = strlen(json);
 
-    if (!len) {
+    if (len == 0 || json[len - 1] != '}') {
         return -1;
     }
 
-    json = &json[len - 1];
+    *pos        = len - 1; /* position of the closing '}' */
+    *need_comma = (len > 2) ? 1 : 0;
+    return 0;
+}
 
-    if (len > 2) {
-        strcpy(json, ",");
-        json++;
+/******************************************************************************/
+int strjson_str(char* json, size_t size, const char* name, const char* value) {
+    size_t pos;
+    int comma;
+
+    if (field_start(json, &pos, &comma)) {
+        return -1;
     }
 
-    strcpy(json, "\"");
-    strcat(json, name);
-    strcat(json, "\":");
+    size_t rem  = size - pos;
+    int written = snprintf(json + pos,
+                           rem,
+                           "%s\"%s\":\"%s\"}",
+                           comma ? "," : "",
+                           name,
+                           value);
+
+    if (written < 0 || (size_t)written >= rem) {
+        /* Truncated — restore closing brace */
+        json[pos]     = '}';
+        json[pos + 1] = '\0';
+        return -1;
+    }
 
     return 0;
 }
 
 /******************************************************************************/
-void strjson_str(char* json, const char* name, const char* value) {
-    if (add_name(json, name)) {
-        return;
+int strjson_int(char* json, size_t size, const char* name, int value) {
+    size_t pos;
+    int comma;
+
+    if (field_start(json, &pos, &comma)) {
+        return -1;
     }
 
-    json = &json[strlen(json)];
+    size_t rem  = size - pos;
+    int written = snprintf(json + pos,
+                           rem,
+                           "%s\"%s\":%d}",
+                           comma ? "," : "",
+                           name,
+                           value);
 
-    strcpy(json, "\"");
-    strcat(json, value);
-    strcat(json, "\"}");
+    if (written < 0 || (size_t)written >= rem) {
+        json[pos]     = '}';
+        json[pos + 1] = '\0';
+        return -1;
+    }
+
+    return 0;
 }
 
 /******************************************************************************/
-void strjson_int(char* json, const char* name, int value) {
-    if (add_name(json, name)) {
-        return;
+int strjson_uint(char* json,
+                 size_t size,
+                 const char* name,
+                 unsigned int value) {
+    size_t pos;
+    int comma;
+
+    if (field_start(json, &pos, &comma)) {
+        return -1;
     }
 
-    json = &json[strlen(json)];
+    size_t rem  = size - pos;
+    int written = snprintf(json + pos,
+                           rem,
+                           "%s\"%s\":%u}",
+                           comma ? "," : "",
+                           name,
+                           value);
 
-    itoa(value, json, 10);
-    strcat(json, "}");
+    if (written < 0 || (size_t)written >= rem) {
+        json[pos]     = '}';
+        json[pos + 1] = '\0';
+        return -1;
+    }
+
+    return 0;
 }
 
 /******************************************************************************/
-void strjson_uint(char* json, const char* name, unsigned int value) {
-    if (add_name(json, name)) {
-        return;
+int strjson_null(char* json, size_t size, const char* name) {
+    size_t pos;
+    int comma;
+
+    if (field_start(json, &pos, &comma)) {
+        return -1;
     }
 
-    json = &json[strlen(json)];
+    size_t rem = size - pos;
+    int written =
+        snprintf(json + pos, rem, "%s\"%s\":null}", comma ? "," : "", name);
 
-    utoa(value, json, 10);
-    strcat(json, "}");
-}
-
-/******************************************************************************/
-void strjson_null(char* json, const char* name) {
-    if (add_name(json, name)) {
-        return;
+    if (written < 0 || (size_t)written >= rem) {
+        json[pos]     = '}';
+        json[pos + 1] = '\0';
+        return -1;
     }
 
-    json = &json[strlen(json)];
-
-    strcpy(json, "null}");
+    return 0;
 }

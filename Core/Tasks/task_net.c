@@ -30,6 +30,7 @@
 #define JSON_MAX_TOKENS       8
 #define MAX_RECORDS_PER_BATCH 10
 #define SEND_RETRIES          3
+#define REQUEST_BODY_SIZE     1024
 
 #define TIME_UPDATE_PERIOD_MS (24 * 60 * 60 * 1000)
 
@@ -50,6 +51,7 @@ struct net_ctx {
     char* url;
     char* hmac;
     char* body;
+    size_t body_size;
 };
 
 /******************************************************************************/
@@ -250,26 +252,29 @@ static void wait_for_net_event(void) {
 /* Build JSON payloads                                                        */
 /******************************************************************************/
 
-static void build_info_payload(char* request, int available_sensors) {
-    strjson_init(request);
-    strjson_uint(request, "uid", params.id);
-    strjson_uint(request, "ts", timestamp);
-    strjson_str(request, "name", PARAMS_DEVICE_NAME);
-    strjson_str(request, "bl_git", (char*)bl.hash);
-    strjson_uint(request, "bl_status", bl.status);
-    strjson_str(request, "app_git", GIT_COMMIT_HASH);
-    strjson_uint(request, "app_ver", PARAMS_FW_VERSION);
-    strjson_str(request, "mcu", params.mcu_uid);
-    strjson_str(request, "apn", params.apn);
-    strjson_str(request, "url_ota", params.url_ota);
-    strjson_str(request, "url_app", params.url_app);
-    strjson_uint(request, "period_app", params.period_app);
-    strjson_uint(request, "period_sen", params.period_sen);
-    strjson_uint(request, "mtime_count", params.mtime_count);
-    strjson_int(request, "sens", available_sensors);
+static void build_info_payload(char* request,
+                               size_t size,
+                               int available_sensors) {
+    strjson_init(request, size);
+    strjson_uint(request, size, "uid", params.id);
+    strjson_uint(request, size, "ts", timestamp);
+    strjson_str(request, size, "name", PARAMS_DEVICE_NAME);
+    strjson_str(request, size, "bl_git", (char*)bl.hash);
+    strjson_uint(request, size, "bl_status", bl.status);
+    strjson_str(request, size, "app_git", GIT_COMMIT_HASH);
+    strjson_uint(request, size, "app_ver", PARAMS_FW_VERSION);
+    strjson_str(request, size, "mcu", params.mcu_uid);
+    strjson_str(request, size, "apn", params.apn);
+    strjson_str(request, size, "url_ota", params.url_ota);
+    strjson_str(request, size, "url_app", params.url_app);
+    strjson_uint(request, size, "period_app", params.period_app);
+    strjson_uint(request, size, "period_sen", params.period_sen);
+    strjson_uint(request, size, "mtime_count", params.mtime_count);
+    strjson_int(request, size, "sens", available_sensors);
 }
 
 static void build_cnet_payload(char* request,
+                               size_t size,
                                struct sim800l_netscan_result* scan) {
     /* Pick strongest cell */
     int best_cell_idx   = -1;
@@ -282,38 +287,39 @@ static void build_cnet_payload(char* request,
         }
     }
 
-    strjson_init(request);
-    strjson_uint(request, "uid", params.id);
-    strjson_uint(request, "ts", timestamp);
+    strjson_init(request, size);
+    strjson_uint(request, size, "uid", params.id);
+    strjson_uint(request, size, "ts", timestamp);
 
     if (best_cell_idx >= 0) {
-        strjson_int(request, "mcc", scan->cells[best_cell_idx].mcc);
-        strjson_int(request, "mnc", scan->cells[best_cell_idx].mnc);
-        strjson_int(request, "lac", scan->cells[best_cell_idx].lac);
-        strjson_int(request, "cid", scan->cells[best_cell_idx].cid);
-        strjson_int(request, "lev", scan->cells[best_cell_idx].level);
+        strjson_int(request, size, "mcc", scan->cells[best_cell_idx].mcc);
+        strjson_int(request, size, "mnc", scan->cells[best_cell_idx].mnc);
+        strjson_int(request, size, "lac", scan->cells[best_cell_idx].lac);
+        strjson_int(request, size, "cid", scan->cells[best_cell_idx].cid);
+        strjson_int(request, size, "lev", scan->cells[best_cell_idx].level);
     } else {
-        strjson_int(request, "mcc", 0);
-        strjson_int(request, "mnc", 0);
-        strjson_int(request, "lac", 0);
-        strjson_int(request, "cid", 0);
-        strjson_int(request, "lev", -113);
+        strjson_int(request, size, "mcc", 0);
+        strjson_int(request, size, "mnc", 0);
+        strjson_int(request, size, "lac", 0);
+        strjson_int(request, size, "cid", 0);
+        strjson_int(request, size, "lev", -113);
     }
 }
 
 static void build_data_payload(char* request,
+                               size_t size,
                                struct sensor_record* records,
                                int record_count,
                                int voltage) {
     char encoded[SENSORS_STR_LEN];
 
-    strjson_init(request);
-    strjson_uint(request, "uid", params.id);
-    strjson_uint(request, "ts", timestamp);
-    strjson_uint(request, "ticks", xTaskGetTickCount());
+    strjson_init(request, size);
+    strjson_uint(request, size, "uid", params.id);
+    strjson_uint(request, size, "ts", timestamp);
+    strjson_uint(request, size, "ticks", xTaskGetTickCount());
 
     if (voltage) {
-        strjson_int(request, "bat", voltage);
+        strjson_int(request, size, "bat", voltage);
     }
 
     if (record_count > 0) {
@@ -324,7 +330,7 @@ static void build_data_payload(char* request,
                             1,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "count", encoded);
+            strjson_str(request, size, "count", encoded);
         }
 
         sensor_field_encode(records,
@@ -334,7 +340,7 @@ static void build_data_payload(char* request,
                             1,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "count_min", encoded);
+            strjson_str(request, size, "count_min", encoded);
         }
 
         sensor_field_encode(records,
@@ -344,7 +350,7 @@ static void build_data_payload(char* request,
                             1,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "count_max", encoded);
+            strjson_str(request, size, "count_max", encoded);
         }
 
         sensor_field_encode(records,
@@ -354,7 +360,7 @@ static void build_data_payload(char* request,
                             10,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "temp", encoded);
+            strjson_str(request, size, "temp", encoded);
         }
 
         sensor_field_encode(records,
@@ -364,7 +370,7 @@ static void build_data_payload(char* request,
                             10,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "hum", encoded);
+            strjson_str(request, size, "hum", encoded);
         }
 
         sensor_field_encode(records,
@@ -374,11 +380,11 @@ static void build_data_payload(char* request,
                             10,
                             encoded);
         if (*encoded) {
-            strjson_str(request, "angle", encoded);
+            strjson_str(request, size, "angle", encoded);
         }
     }
 
-    strjson_int(request, "tamper", READ_TAMPER);
+    strjson_int(request, size, "tamper", READ_TAMPER);
 }
 
 /******************************************************************************/
@@ -390,14 +396,15 @@ void task_net(void* argument) {
 
     char url[PARAMS_APP_URL_SIZE + 32];
     char hmac[HMAC_BASE64_LEN];
-    char request_body[512];
+    char request_body[REQUEST_BODY_SIZE];
     struct sensorq* queue = task_ctx->queue;
 
     struct net_ctx ctx = {
-        .logger = task_ctx->logger,
-        .url    = url,
-        .hmac   = hmac,
-        .body   = request_body,
+        .logger    = task_ctx->logger,
+        .url       = url,
+        .hmac      = hmac,
+        .body      = request_body,
+        .body_size = sizeof(request_body),
     };
 
     TickType_t last_time_update = 0;
@@ -422,14 +429,14 @@ void task_net(void* argument) {
     int available_sensors = task_ctx->actual->avail;
     xSemaphoreGive(task_ctx->actual->mutex);
 
-    build_info_payload(request_body, available_sensors);
+    build_info_payload(request_body, sizeof(request_body), available_sensors);
     request_post(&ctx, "/api/info");
 
     /* 3. Network scan → /api/cnet */
     {
         struct sim800l_netscan_result scan_result;
         request_netscan(&scan_result);
-        build_cnet_payload(request_body, &scan_result);
+        build_cnet_payload(request_body, sizeof(request_body), &scan_result);
     }
     request_post(&ctx, "/api/cnet");
 
@@ -459,7 +466,11 @@ void task_net(void* argument) {
         int record_count = sensor_read(queue, records, MAX_RECORDS_PER_BATCH);
 
         /* Build data payload */
-        build_data_payload(request_body, records, record_count, voltage);
+        build_data_payload(ctx.body,
+                           ctx.body_size,
+                           records,
+                           record_count,
+                           voltage);
 
         /* Try to send with retries */
         led_blink(4);

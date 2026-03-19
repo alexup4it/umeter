@@ -1,17 +1,16 @@
 /*
  * String JSON
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024
  */
 
 #ifndef STRJSON_H_
 #define STRJSON_H_
 
-void strjson_init(char* json);
-void strjson_str(char* json, const char* name, const char* value);
-void strjson_int(char* json, const char* name, int value);
-void strjson_uint(char* json, const char* name, unsigned int value);
-void strjson_null(char* json, const char* name);
+#include <stddef.h>
+
+void strjson_init(char* json, size_t size);
+int strjson_str(char* json, size_t size, const char* name, const char* value);
+int strjson_int(char* json, size_t size, const char* name, int value);
+int strjson_uint(char* json, size_t size, const char* name, unsigned int value);
+int strjson_null(char* json, size_t size, const char* name);
 
 #endif /* STRJSON_H_ */
