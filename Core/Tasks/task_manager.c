@@ -87,7 +87,7 @@ void task_manager_run(struct task_default_ctx* ctx) {
                                 TASK_EVENT_ANEMOMETER_DONE,
                                 pdTRUE,
                                 pdFALSE,
-                                pdMS_TO_TICKS(period_base));
+                                pdMS_TO_TICKS(period_base * 1000U));
         }
 
         if (do_sen) {
@@ -96,7 +96,7 @@ void task_manager_run(struct task_default_ctx* ctx) {
                                 TASK_EVENT_SENSORS_DONE,
                                 pdTRUE,
                                 pdFALSE,
-                                pdMS_TO_TICKS(period_sen));
+                                pdMS_TO_TICKS(period_sen * 1000U));
         }
 
         if (do_app) {

@@ -19,8 +19,6 @@
 #    define TAG "SENSORS"
 #endif
 
-static struct task_sensors_ctx* s_ctx;
-
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
 enum {
@@ -55,8 +53,6 @@ void task_sensors(void* argument) {
     uint32_t ts;
 
     char* tmp;
-
-    s_ctx = ctx;
 
     /* Check sensor availability */
 #ifdef AVOLTAGE_CALIB
