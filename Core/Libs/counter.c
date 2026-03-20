@@ -73,7 +73,11 @@ uint32_t counter_speed(struct counter* cnt) {
     if (avg == 0) {
         return 0;
     }
-    return COUNTER_SPEED_SCALE / avg;
+    uint32_t avg_ms = avg * portTICK_PERIOD_MS;
+    if (avg_ms == 0) {
+        return 0;
+    }
+    return COUNTER_SPEED_SCALE / avg_ms;
 }
 
 /******************************************************************************/

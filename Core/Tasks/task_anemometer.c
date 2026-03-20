@@ -34,14 +34,14 @@ void task_anemometer(void* argument) {
 
         /* Power on and stabilize */
         ctx->anemometer_on();
-        osDelay(COUNTER_STABILIZE_MS);
+        osDelay(pdMS_TO_TICKS(COUNTER_STABILIZE_MS));
 
         /* Reset counter before measurement */
         counter_reset(ctx->cnt);
 
         elapsed = 0;
         while (elapsed < COUNTER_MEAS_TIME_MS) {
-            osDelay(COUNTER_POLL_MS);
+            osDelay(pdMS_TO_TICKS(COUNTER_POLL_MS));
             elapsed += COUNTER_POLL_MS;
 
             if (ctx->cnt->period_cnt >= COUNTER_MIN_PERIODS) {

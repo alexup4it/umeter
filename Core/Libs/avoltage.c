@@ -16,7 +16,7 @@
 #define ADC_REF     3300
 
 /* Settling time for voltage divider after enabling MOSFET (ms) */
-#define MEAS_SETTLE_MS 2
+#define MEAS_SETTLE_MS 10
 
 /******************************************************************************/
 void avoltage_init(struct avoltage* avlt, ADC_HandleTypeDef* adc, int ratio) {

@@ -105,7 +105,7 @@ void siface_task(struct siface* siface) {
                                      EVENT_RX | EVENT_WAKEUP,
                                      pdTRUE,
                                      pdFALSE,
-                                     1000);
+                                     pdMS_TO_TICKS(1000));
 
         if (events & EVENT_RX) {
             command(siface, 100);
@@ -126,7 +126,7 @@ void siface_task(struct siface* siface) {
                                     EVENT_TX,
                                     pdTRUE,
                                     pdFALSE,
-                                    1000);
+                                    pdMS_TO_TICKS(1000));
                 vPortFree(string);
             }
         }
