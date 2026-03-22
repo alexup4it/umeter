@@ -195,8 +195,9 @@ static uint32_t rtc_time_to_ms(const RTC_TimeTypeDef* t) {
     uint32_t ms = ((uint32_t)t->Hours * 3600U + (uint32_t)t->Minutes * 60U +
                    (uint32_t)t->Seconds) *
                   1000U;
-    /* SubSeconds counts down from SynchPrediv (255) to 0 */
-    ms += ((uint32_t)(255U - t->SubSeconds) * 1000U) / 256U;
+    /* SubSeconds counts down from SynchPrediv to 0 */
+    ms += ((uint32_t)(t->SecondFraction - t->SubSeconds) * 1000U) /
+          (t->SecondFraction + 1U);
     return ms;
 }
 

@@ -1,6 +1,11 @@
 /*
  * Anemometer (pulse counter) task
  *
+ * Event-driven: the task sleeps (allowing MCU Stop mode) between
+ * hall-sensor pulses.  counter_irq() sends a task notification on
+ * each EXTI edge, so the MCU wakes only to record the timestamp
+ * and immediately goes back to sleep.
+ *
  * Dmitry Proshutinsky <dproshutinsky@gmail.com>
  * 2025-2026
  */
@@ -15,13 +20,15 @@
 /* Stabilization time after power on (ms) */
 #define COUNTER_STABILIZE_MS 10
 
-/* Polling interval while waiting for pulses (ms) */
-#define COUNTER_POLL_MS 50
+/*
+ * Timeout for the first pulse (ms).
+ * If no pulse arrives within this time, assume zero wind.
+ */
+#define COUNTER_FIRST_PULSE_TIMEOUT_MS (COUNTER_MEAS_TIME_MS / 2)
 
 void task_anemometer(void* argument) {
     struct task_anemometer_ctx* ctx = argument;
     uint32_t value;
-    uint32_t elapsed;
 
     for (;;) {
         xEventGroupWaitBits(task_events,
@@ -36,22 +43,51 @@ void task_anemometer(void* argument) {
         ctx->anemometer_on();
         osDelay(pdMS_TO_TICKS(COUNTER_STABILIZE_MS));
 
-        /* Reset counter before measurement */
+        /* Reset counter and register for notifications */
         counter_reset(ctx->cnt);
+        ctx->cnt->notify_task = xTaskGetCurrentTaskHandle();
 
-        elapsed = 0;
-        while (elapsed < COUNTER_MEAS_TIME_MS) {
-            osDelay(pdMS_TO_TICKS(COUNTER_POLL_MS));
-            elapsed += COUNTER_POLL_MS;
+        /* Clear any stale notifications */
+        ulTaskNotifyTake(pdTRUE, 0);
 
-            if (ctx->cnt->period_cnt >= COUNTER_MIN_PERIODS) {
-                break;
-            }
+        /*
+         * Wait for the first pulse (establishes t_start).
+         * MCU is free to enter Stop mode during this wait.
+         */
+        if (ulTaskNotifyTake(pdTRUE,
+                             pdMS_TO_TICKS(COUNTER_FIRST_PULSE_TIMEOUT_MS)) ==
+            0) {
+            /* Timeout — no wind */
+            goto done;
+        }
 
-            if (elapsed >= COUNTER_MEAS_TIME_MS / 2 && !ctx->cnt->started) {
-                break;
+        /*
+         * Collect subsequent pulses until we have enough periods
+         * or the measurement window expires.
+         */
+        {
+            TickType_t deadline =
+                xTaskGetTickCount() + pdMS_TO_TICKS(COUNTER_MEAS_TIME_MS);
+
+            while (ctx->cnt->period_cnt < COUNTER_MIN_PERIODS) {
+                TickType_t now = xTaskGetTickCount();
+                TickType_t remain;
+
+                if (now >= deadline) {
+                    break;
+                }
+                remain = deadline - now;
+
+                if (ulTaskNotifyTake(pdTRUE, remain) == 0) {
+                    /* Timeout — no more pulses within window */
+                    break;
+                }
             }
         }
+
+    done:
+        /* Stop listening */
+        ctx->cnt->notify_task = NULL;
 
         value = counter_speed(ctx->cnt);
 
