@@ -414,6 +414,7 @@ void task_net(void* argument) {
     /* ------------------------------------------------------------------ */
 
     wait_for_net_event();
+    // logger_add_str(ctx.logger, TAG, false, "net task started");
 
     /* 1. Get server time */
     for (int attempt = 0; attempt < SEND_RETRIES; attempt++) {
@@ -424,6 +425,8 @@ void task_net(void* argument) {
         wait_for_net_event();
     }
 
+    // logger_add_str(ctx.logger, TAG, false, "time synced");
+
     /* 2. Send station info → /api/info */
     xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
     int available_sensors = task_ctx->actual->avail;
@@ -432,6 +435,8 @@ void task_net(void* argument) {
     build_info_payload(request_body, sizeof(request_body), available_sensors);
     request_post(&ctx, "/api/info");
 
+    // logger_add_str(ctx.logger, TAG, false, "info sent");
+
     /* 3. Network scan → /api/cnet */
     {
         struct sim800l_netscan_result scan_result;
@@ -439,6 +444,7 @@ void task_net(void* argument) {
         build_cnet_payload(request_body, sizeof(request_body), &scan_result);
     }
     request_post(&ctx, "/api/cnet");
+    // logger_add_str(ctx.logger, TAG, false, "cnet sent");
 
     /* ------------------------------------------------------------------ */
     /* Main loop                                                           */
@@ -447,6 +453,8 @@ void task_net(void* argument) {
     for (;;) {
         /* Wait for scheduler trigger */
         wait_for_net_event();
+
+        // logger_add_str(ctx.logger, TAG, false, "net triggered");
 
         /* Update time if needed */
         if ((xTaskGetTickCount() - last_time_update) >=

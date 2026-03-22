@@ -118,15 +118,22 @@ void siface_task(struct siface* siface) {
             while (num) {
                 num--;
 
+                /* Prioritize incoming commands over queued TX */
+                if (xEventGroupGetBits(siface->events) & EVENT_RX) {
+                    break;
+                }
+
                 xQueueReceive(siface->queue, &string, portMAX_DELAY);
                 //				HAL_UART_Transmit_DMA(siface->uart, (uint8_t *) string,
                 //						strlen(string));
-                CDC_Transmit_FS((uint8_t*)string, strlen(string));
-                xEventGroupWaitBits(siface->events,
-                                    EVENT_TX,
-                                    pdTRUE,
-                                    pdFALSE,
-                                    pdMS_TO_TICKS(1000));
+                if (CDC_Transmit_FS((uint8_t*)string, strlen(string)) ==
+                    USBD_OK) {
+                    xEventGroupWaitBits(siface->events,
+                                        EVENT_TX,
+                                        pdTRUE,
+                                        pdFALSE,
+                                        pdMS_TO_TICKS(1000));
+                }
                 vPortFree(string);
             }
         }
