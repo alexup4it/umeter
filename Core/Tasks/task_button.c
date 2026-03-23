@@ -16,6 +16,19 @@ static void save_angle_from_actual(struct actual* actual) {
     int32_t angle;
     params_t uparams;
 
+    /* Reset offset so sensors read raw angle */
+    params.offset_angle = 0;
+
+    /* Trigger a fresh sensor reading with zero offset */
+    xEventGroupClearBits(task_events, TASK_EVENT_SENSORS_DONE);
+    xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_START);
+    xEventGroupWaitBits(task_events,
+                        TASK_EVENT_SENSORS_DONE,
+                        pdTRUE,
+                        pdFALSE,
+                        portMAX_DELAY);
+
+    /* Now actual->angle == raw angle (offset was 0) */
     xSemaphoreTake(actual->mutex, portMAX_DELAY);
     angle = actual->angle;
     xSemaphoreGive(actual->mutex);
@@ -24,6 +37,7 @@ static void save_angle_from_actual(struct actual* actual) {
         return;
     }
 
+    /* Save raw angle as new offset */
     memcpy(&uparams, &params, sizeof(uparams));
     uparams.offset_angle = (uint32_t)angle;
 
@@ -33,6 +47,11 @@ static void save_angle_from_actual(struct actual* actual) {
     xTaskResumeAll();
 
     params.offset_angle = (uint32_t)angle;
+
+    /* Update actual to reflect zero angle */
+    xSemaphoreTake(actual->mutex, portMAX_DELAY);
+    actual->angle = 0;
+    xSemaphoreGive(actual->mutex);
 }
 
 void task_button_irq_notify_from_isr(void) {
@@ -55,14 +74,6 @@ void task_button(void* argument) {
     for (;;) {
         notifications = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         while (notifications--) {
-            xEventGroupClearBits(task_events, TASK_EVENT_SENSORS_DONE);
-            xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_START);
-            xEventGroupWaitBits(task_events,
-                                TASK_EVENT_SENSORS_DONE,
-                                pdTRUE,
-                                pdFALSE,
-                                portMAX_DELAY);
-
             save_angle_from_actual(ctx->actual);
         }
     }
