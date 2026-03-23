@@ -68,6 +68,22 @@ static void clear_rx(struct sim800l* self) {
     self->rx_buffer[0] = '\0';
 }
 
+static void transmit_raw(struct sim800l* self,
+                         const char* data,
+                         size_t length) {
+    if (length > SIM800L_BUFFER_SIZE) {
+        length = SIM800L_BUFFER_SIZE;
+    }
+
+    memcpy(self->tx_buffer, data, length);
+    log_modem(self, LOG_INFO, '>', data, length);
+
+    while (
+        HAL_UART_Transmit_DMA(self->uart, (uint8_t*)self->tx_buffer, length) ==
+        HAL_BUSY
+    );
+}
+
 static void transmit(struct sim800l* self, const char* data) {
     size_t length = strlen(data);
     if (length > SIM800L_BUFFER_SIZE) {
@@ -444,7 +460,11 @@ static int http_setup(struct sim800l* self,
             return -1;
         }
 
-        if (!send_command(self, body, 500)) {
+        /* Send raw body without \r\n — must match HTTPDATA byte count exactly */
+        clear_rx(self);
+        transmit_raw(self, body, strlen(body));
+
+        if (!wait_for_ok(self, 5000)) {
             return -1;
         }
     }
