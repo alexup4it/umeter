@@ -16,6 +16,7 @@
 #include "rtctime.h"
 #include "siface.h"
 #include "strjson.h"
+#include "task.h"
 
 #define JSMN_HEADER
 #include "jsmn.h"
@@ -247,6 +248,40 @@ static int parse(struct appiface* appif,
             }
         } else {
             return -1;
+        }
+    } else if (jsoneq(request, tcmd, "mem") == 0) {
+        extern size_t stack_size(void);
+
+        const char* t_names[] = {"def",
+                                 "logging",
+                                 "net",
+                                 "serial_iface",
+                                 "ota",
+                                 "modem",
+                                 "sensors",
+                                 "anemometer",
+                                 "button",
+                                 "watchdog",
+                                 NULL};
+
+        strjson_uint(response,
+                     resp_size,
+                     "heap",
+                     xPortGetMinimumEverFreeHeapSize());
+        strjson_uint(response, resp_size, "main_stack", stack_size());
+
+        for (int i = 0; t_names[i]; i++) {
+            TaskHandle_t handle = xTaskGetHandle(t_names[i]);
+            if (!handle) {
+                continue;
+            }
+
+            TaskStatus_t details;
+            vTaskGetInfo(handle, &details, pdTRUE, eInvalid);
+            strjson_uint(response,
+                         resp_size,
+                         t_names[i],
+                         details.usStackHighWaterMark * sizeof(StackType_t));
         }
     } else if (jsoneq(request, tcmd, "save") == 0) {
         vTaskSuspendAll();

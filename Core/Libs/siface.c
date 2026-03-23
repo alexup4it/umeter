@@ -1,8 +1,5 @@
 /*
  * Serial interface
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #include "siface.h"
@@ -68,37 +65,61 @@ static size_t receive_buf(struct siface* siface) {
     return rec;
 }
 
-static int command(struct siface* siface, int wait_time) {
+static int buf_has_json(struct siface* siface) {
+    for (size_t i = 0; i < siface->buflen; i++) {
+        if (siface->buf[i] == '}') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int command(struct siface* siface, int timeout_ms) {
+    TickType_t deadline;
     size_t received;
-    int ret;
 
-    received = receive_buf(siface);
-    if (!received) {
-        return -1;
+    deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+
+    /* Accumulate data until we see a complete JSON object or timeout */
+    for (;;) {
+        received = receive_buf(siface);
+
+        if (buf_has_json(siface)) {
+            return siface->callback(siface);
+        }
+
+        if (!received && (int32_t)(xTaskGetTickCount() - deadline) >= 0) {
+            return -1;
+        }
+
+        /* Yield briefly to let more data arrive */
+        osDelay(pdMS_TO_TICKS(1));
     }
+}
 
-    ret = siface->callback(siface);
-    if (!ret) {
-        return ret;
+static void drain_queue(struct siface* siface) {
+    UBaseType_t num;
+    char* string;
+
+    num = uxQueueMessagesWaiting(siface->queue);
+
+    while (num) {
+        num--;
+
+        xQueueReceive(siface->queue, &string, portMAX_DELAY);
+        CDC_Transmit_FS((uint8_t*)string, strlen(string));
+        xEventGroupWaitBits(siface->events,
+                            EVENT_TX,
+                            pdTRUE,
+                            pdFALSE,
+                            pdMS_TO_TICKS(1000));
+        vPortFree(string);
     }
-
-    /* Try again */
-    osDelay(pdMS_TO_TICKS(wait_time));
-
-    received = receive_buf(siface);
-    if (!received) {
-        return -1;
-    }
-
-    ret = siface->callback(siface);
-    return ret;
 }
 
 /******************************************************************************/
 void siface_task(struct siface* siface) {
     EventBits_t events;
-    UBaseType_t num;
-    char* string;
 
     for (;;) {
         events = xEventGroupWaitBits(siface->events,
@@ -112,31 +133,7 @@ void siface_task(struct siface* siface) {
             clear_buf(siface);
         }
 
-        if (events & EVENT_WAKEUP) {
-            num = uxQueueMessagesWaiting(siface->queue);
-
-            while (num) {
-                num--;
-
-                /* Prioritize incoming commands over queued TX */
-                if (xEventGroupGetBits(siface->events) & EVENT_RX) {
-                    break;
-                }
-
-                xQueueReceive(siface->queue, &string, portMAX_DELAY);
-                //				HAL_UART_Transmit_DMA(siface->uart, (uint8_t *) string,
-                //						strlen(string));
-                if (CDC_Transmit_FS((uint8_t*)string, strlen(string)) ==
-                    USBD_OK) {
-                    xEventGroupWaitBits(siface->events,
-                                        EVENT_TX,
-                                        pdTRUE,
-                                        pdFALSE,
-                                        pdMS_TO_TICKS(1000));
-                }
-                vPortFree(string);
-            }
-        }
+        drain_queue(siface);
     }
 }
 

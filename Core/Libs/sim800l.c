@@ -10,9 +10,31 @@
 #include "logger.h"
 #include "task.h"
 
-#ifdef LOGGER
-#    define TAG "SIM800L"
-#endif
+#define TAG "SIM800L"
+
+/******************************************************************************/
+/* Modem log helper: prepend direction char (> for TX, < for RX)             */
+/******************************************************************************/
+
+static void log_modem(struct sim800l* self,
+                      enum log_level level,
+                      char dir,
+                      const char* buf,
+                      size_t len) {
+    if (!log_usb_active) {
+        return;
+    }
+
+    char* tmp = pvPortMalloc(len + 1);
+    if (!tmp) {
+        return;
+    }
+
+    tmp[0] = dir;
+    memcpy(tmp + 1, buf, len);
+    logger_add(self->logger, level, TAG, true, tmp, len + 1);
+    vPortFree(tmp);
+}
 
 /******************************************************************************/
 /* Low-level UART helpers                                                     */
@@ -57,9 +79,7 @@ static void transmit(struct sim800l* self, const char* data) {
     self->tx_buffer[length + 1] = '\n';
     length += 2;
 
-#ifdef LOGGER
-    logger_add(self->logger, TAG, false, (char*)self->tx_buffer, length);
-#endif
+    log_modem(self, LOG_INFO, '>', (char*)self->tx_buffer, length);
 
     clear_rx(self);
     while (
@@ -86,11 +106,9 @@ static bool poll_rx(struct sim800l* self, TickType_t remaining_ticks) {
     self->rx_length += received;
     self->rx_buffer[self->rx_length] = '\0';
 
-#ifdef LOGGER
     if (received) {
-        logger_add(self->logger, TAG, false, (char*)dest, received);
+        log_modem(self, LOG_INFO, '<', (char*)dest, received);
     }
-#endif
 
     return received > 0;
 }
@@ -183,6 +201,10 @@ static bool wait_for_ok(struct sim800l* self, const uint32_t timeout_ms) {
         if (!poll_rx(self, timeout_ticks - elapsed)) {
             break;
         }
+    }
+
+    if (!found_ok) {
+        LOG_W(self->logger, TAG, "expect OK");
     }
 
     return found_ok;

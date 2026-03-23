@@ -23,9 +23,7 @@
 #include "sim800l.h"
 #include "strjson.h"
 
-#ifdef LOGGER
-#    define TAG "NET"
-#endif
+#define TAG "NET"
 
 #define JSON_MAX_TOKENS       8
 #define MAX_RECORDS_PER_BATCH 10
@@ -194,9 +192,7 @@ static int request_time(struct net_ctx* ctx) {
 
         set_timestamp(ts);
 
-#ifdef LOGGER
-        logger_add_str(ctx->logger, TAG, false, response.body);
-#endif
+        LOG_I(ctx->logger, TAG, response.body);
 
         ret = 0;
     } while (0);
@@ -414,7 +410,7 @@ void task_net(void* argument) {
     /* ------------------------------------------------------------------ */
 
     wait_for_net_event();
-    // logger_add_str(ctx.logger, TAG, false, "net task started");
+    LOG_I(ctx.logger, TAG, "started");
 
     /* 1. Get server time */
     for (int attempt = 0; attempt < SEND_RETRIES; attempt++) {
@@ -425,7 +421,7 @@ void task_net(void* argument) {
         wait_for_net_event();
     }
 
-    // logger_add_str(ctx.logger, TAG, false, "time synced");
+    LOG_I(ctx.logger, TAG, "time synced");
 
     /* 2. Send station info → /api/info */
     xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
@@ -435,7 +431,7 @@ void task_net(void* argument) {
     build_info_payload(request_body, sizeof(request_body), available_sensors);
     request_post(&ctx, "/api/info");
 
-    // logger_add_str(ctx.logger, TAG, false, "info sent");
+    LOG_I(ctx.logger, TAG, "info sent");
 
     /* 3. Network scan → /api/cnet */
     {
@@ -444,7 +440,7 @@ void task_net(void* argument) {
         build_cnet_payload(request_body, sizeof(request_body), &scan_result);
     }
     request_post(&ctx, "/api/cnet");
-    // logger_add_str(ctx.logger, TAG, false, "cnet sent");
+    LOG_I(ctx.logger, TAG, "cnet sent");
 
     /* ------------------------------------------------------------------ */
     /* Main loop                                                           */
@@ -454,7 +450,7 @@ void task_net(void* argument) {
         /* Wait for scheduler trigger */
         wait_for_net_event();
 
-        // logger_add_str(ctx.logger, TAG, false, "net triggered");
+        LOG_I(ctx.logger, TAG, "triggered");
 
         /* Update time if needed */
         if ((xTaskGetTickCount() - last_time_update) >=
@@ -494,9 +490,7 @@ void task_net(void* argument) {
         if (sent) {
             sensorq_drop(queue, record_count);
         } else {
-#ifdef LOGGER
-            logger_add_str(ctx.logger, TAG, false, "data send failed");
-#endif
+            LOG_E(ctx.logger, TAG, "data send failed");
         }
 
         /* If more data in queue, loop immediately */

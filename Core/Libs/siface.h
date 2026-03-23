@@ -1,8 +1,5 @@
 /*
  * Serial interface
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #ifndef SIFACE_H_
@@ -14,7 +11,7 @@
 #include "stm32f4xx_hal.h"
 #include "stream_buffer.h"
 
-#define SIFACE_BUFFER_SIZE      256
+#define SIFACE_BUFFER_SIZE      128
 #define SIFACE_UART_BUFFER_SIZE 128
 
 typedef int (*siface_cb)(void*);

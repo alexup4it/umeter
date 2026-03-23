@@ -14,9 +14,7 @@
 #include "sim800l.h"
 #include "task.h"
 
-#ifdef LOGGER
-#    define TAG "MODEM"
-#endif
+#define TAG "MODEM"
 
 #define MODEM_QUEUE_SIZE 8
 
@@ -80,31 +78,26 @@ static int modem_ensure_ready(struct modem_ctx* ctx) {
     xSemaphoreGive(ctx->actual->mutex);
 
     if (voltage < VOLTAGE_MIN_MV) {
-#ifdef LOGGER
-        logger_add_str(ctx->logger, TAG, false, "voltage too low");
-#endif
+        LOG_W(ctx->logger, TAG, "voltage too low");
         return -1;
     }
 
     modem_power_on(ctx);
 
     if (sim800l_startup(ctx->modem) != 0) {
-#ifdef LOGGER
-        logger_add_str(ctx->logger, TAG, false, "startup failed");
-#endif
+        LOG_E(ctx->logger, TAG, "startup failed");
         modem_power_off(ctx);
         return -1;
     }
 
     if (sim800l_wait_network(ctx->modem, NETWORK_TIMEOUT_MS) != 0) {
-#ifdef LOGGER
-        logger_add_str(ctx->logger, TAG, false, "no network");
-#endif
+        LOG_E(ctx->logger, TAG, "no network");
         modem_power_off(ctx);
         return -1;
     }
 
     ctx->ready = true;
+    LOG_I(ctx->logger, TAG, "ready");
 
     return 0;
 }
@@ -119,14 +112,13 @@ static int modem_ensure_gprs(struct modem_ctx* ctx) {
     }
 
     if (sim800l_gprs_open(ctx->modem) != 0) {
-#ifdef LOGGER
-        logger_add_str(ctx->logger, TAG, false, "GPRS open failed");
-#endif
+        LOG_E(ctx->logger, TAG, "GPRS open failed");
         modem_power_off(ctx);
         return -1;
     }
 
     ctx->gprs_open = true;
+    LOG_I(ctx->logger, TAG, "GPRS open");
     return 0;
 }
 
@@ -248,9 +240,7 @@ void task_modem(void* argument) {
             }
         } else if (ctx.ready) {
             /* Queue timed out — no requests for IDLE_POWER_OFF_MS */
-#ifdef LOGGER
-            logger_add_str(ctx.logger, TAG, false, "idle, powering off");
-#endif
+            LOG_I(ctx.logger, TAG, "idle, powering off");
             modem_power_off(&ctx);
         }
     }

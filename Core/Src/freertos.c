@@ -109,7 +109,7 @@ const osThreadAttr_t modem_attributes = {
 osThreadId_t serial_ifaceHandle;
 const osThreadAttr_t serial_iface_attributes = {
     .name       = "serial_iface",
-    .stack_size = 128 * 4,
+    .stack_size = 256 * 4,
     .priority   = (osPriority_t)osPriorityNormal,
 };
 /* Definitions for ota */

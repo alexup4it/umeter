@@ -15,9 +15,8 @@
 #include "ptasks.h"
 #include "rtctime.h"
 #include "sensorq.h"
-#ifdef LOGGER
-#    define TAG "SENSORS"
-#endif
+
+#define TAG "SENSORS"
 
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
@@ -81,15 +80,13 @@ void task_sensors(void* argument) {
     ctx->actual->avail = avail;
     xSemaphoreGive(ctx->actual->mutex);
 
-#ifdef LOGGER
     tmp = pvPortMalloc(sizeof(avail) * 8 + 2);
     if (tmp) {
         itoa(avail, tmp, 2);
         strcat(tmp, "b");
-        logger_add_str(ctx->logger, TAG, false, tmp);
+        LOG_I(ctx->logger, TAG, tmp);
         vPortFree(tmp);
     }
-#endif
 
     for (;;) {
         xEventGroupWaitBits(task_events,
