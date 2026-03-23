@@ -32,7 +32,7 @@ void task_manager_init(void);
 
 struct sensorq;
 
-struct sensor_record {
+struct __attribute__((packed)) sensor_record {
     uint32_t timestamp;
     uint16_t voltage;    /* millivolts              */
     int16_t temperature; /* centidegrees C (0.01°C) */
@@ -42,6 +42,9 @@ struct sensor_record {
     uint16_t count_min;
     uint16_t count_max;
 };
+
+_Static_assert(sizeof(struct sensor_record) == 18,
+               "sensor_record must be 18 bytes (binary wire format)");
 
 /* --- Utility functions (callable from any context) --- */
 
@@ -156,6 +159,7 @@ struct sim800l_netscan_result;
 enum modem_request_type {
     MODEM_REQ_HTTP_GET,
     MODEM_REQ_HTTP_POST,
+    MODEM_REQ_HTTP_POST_BIN,
     MODEM_REQ_NETSCAN,
 };
 
@@ -165,7 +169,8 @@ struct modem_request {
     /* HTTP fields */
     const char* url;
     const char* auth_header;
-    const char* body;
+    const void* body;
+    size_t body_length; /* used by HTTP_POST_BIN */
     bool read_auth;
     struct sim800l_http_response* response;
 

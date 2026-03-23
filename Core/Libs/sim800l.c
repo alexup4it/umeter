@@ -427,10 +427,9 @@ static char* parse_http_read(struct sim800l* self,
 /* HTTP session (internal)                                                    */
 /******************************************************************************/
 
-static int http_setup(struct sim800l* self,
-                      const char* url,
-                      const char* auth_header,
-                      const char* body) {
+static int http_setup_common(struct sim800l* self,
+                             const char* url,
+                             const char* auth_header) {
     char cmd[96];
 
     strcpy(cmd, "AT+HTTPPARA=URL,");
@@ -447,26 +446,69 @@ static int http_setup(struct sim800l* self,
         }
     }
 
+    return 0;
+}
+
+static int http_upload_body(struct sim800l* self,
+                            const char* content_type,
+                            const void* body,
+                            size_t body_len) {
+    char cmd[96];
+
+    strcpy(cmd, "AT+HTTPPARA=CONTENT,");
+    strcat(cmd, content_type);
+    if (!send_command(self, cmd, 500)) {
+        return -1;
+    }
+
+    strcpy(cmd, "AT+HTTPDATA=");
+    utoa(body_len, &cmd[strlen(cmd)], 10);
+    strcat(cmd, ",5000");
+    transmit(self, cmd);
+    if (!read_to(self, 1000, "DOWNLOAD")) {
+        return -1;
+    }
+
+    /* Send raw body without \r\n — must match HTTPDATA byte count exactly */
+    clear_rx(self);
+    transmit_raw(self, body, body_len);
+
+    if (!wait_for_ok(self, 5000)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int http_setup(struct sim800l* self,
+                      const char* url,
+                      const char* auth_header,
+                      const char* body) {
+    if (http_setup_common(self, url, auth_header) != 0) {
+        return -1;
+    }
+
     if (body) {
-        if (!send_command(self, "AT+HTTPPARA=CONTENT,application/json", 500)) {
-            return -1;
-        }
+        return http_upload_body(self, "application/json", body, strlen(body));
+    }
 
-        strcpy(cmd, "AT+HTTPDATA=");
-        utoa(strlen(body), &cmd[strlen(cmd)], 10);
-        strcat(cmd, ",5000");
-        transmit(self, cmd);
-        if (!read_to(self, 1000, "DOWNLOAD")) {
-            return -1;
-        }
+    return 0;
+}
 
-        /* Send raw body without \r\n — must match HTTPDATA byte count exactly */
-        clear_rx(self);
-        transmit_raw(self, body, strlen(body));
+static int http_setup_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len) {
+    if (http_setup_common(self, url, auth_header) != 0) {
+        return -1;
+    }
 
-        if (!wait_for_ok(self, 5000)) {
-            return -1;
-        }
+    if (body && body_len > 0) {
+        return http_upload_body(self,
+                                "application/octet-stream",
+                                body,
+                                body_len);
     }
 
     return 0;
@@ -539,6 +581,48 @@ int sim800l_http_post(struct sim800l* self,
                       const char* body,
                       struct sim800l_http_response* response) {
     return http_execute(self, url, auth_header, body, false, response);
+}
+
+int sim800l_http_post_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len,
+                          struct sim800l_http_response* response) {
+    int result = -1;
+
+    memset(response, 0, sizeof(*response));
+
+    if (!send_command(self, "AT+HTTPINIT", 2000) ||
+        !send_command(self, "AT+HTTPPARA=CID,1", 2000)) {
+        return -1;
+    }
+
+    do {
+        if (http_setup_bin(self, url, auth_header, body, body_len) != 0) {
+            break;
+        }
+
+        /* Execute POST */
+        transmit(self, "AT+HTTPACTION=1");
+        int http_status = parse_http_action(self, NULL, 30000);
+        if (http_status != 200) {
+            break;
+        }
+
+        /* Read response body */
+        transmit(self, "AT+HTTPREAD");
+        response->body = parse_http_read(self, &response->body_length, 1000);
+        if (!response->body) {
+            break;
+        }
+        result = 200;
+    } while (0);
+
+    /* Terminate HTTP session */
+    send_command(self, "AT+HTTPTERM", 2000);
+
+    return result;
 }
 
 /******************************************************************************/

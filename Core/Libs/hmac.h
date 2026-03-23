@@ -24,7 +24,7 @@
  * should be equal HMAC_BASE64_LEN
  */
 void hmac_base64(const uint8_t* secret,
-                 const char* data,
+                 const void* data,
                  size_t len,
                  char* out);
 

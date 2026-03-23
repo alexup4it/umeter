@@ -148,8 +148,22 @@ static int process_http_post(struct modem_ctx* ctx,
     return sim800l_http_post(ctx->modem,
                              request->url,
                              request->auth_header,
-                             request->body,
+                             (const char*)request->body,
                              request->response);
+}
+
+static int process_http_post_bin(struct modem_ctx* ctx,
+                                 struct modem_request* request) {
+    if (modem_ensure_gprs(ctx) != 0) {
+        return -1;
+    }
+
+    return sim800l_http_post_bin(ctx->modem,
+                                 request->url,
+                                 request->auth_header,
+                                 request->body,
+                                 request->body_length,
+                                 request->response);
 }
 
 static int process_netscan(struct modem_ctx* ctx,
@@ -222,6 +236,9 @@ void task_modem(void* argument) {
                     break;
                 case MODEM_REQ_HTTP_POST:
                     result = process_http_post(&ctx, &request);
+                    break;
+                case MODEM_REQ_HTTP_POST_BIN:
+                    result = process_http_post_bin(&ctx, &request);
                     break;
                 case MODEM_REQ_NETSCAN:
                     result = process_netscan(&ctx, &request);

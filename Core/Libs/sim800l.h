@@ -128,6 +128,22 @@ int sim800l_http_post(struct sim800l* self,
                       struct sim800l_http_response* response);
 
 /**
+ * HTTP POST request with binary body (Content-Type: application/octet-stream).
+ * @param url        full URL
+ * @param auth_header  Authorization header value to send (NULL = none)
+ * @param body       binary body (may contain NUL bytes)
+ * @param body_len   body length in bytes
+ * @param response   output (caller frees body/authorization with vPortFree)
+ * @return HTTP status code (200 = OK), or -1 on failure
+ */
+int sim800l_http_post_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len,
+                          struct sim800l_http_response* response);
+
+/**
  * Perform network scan (AT+CNETSCAN).
  * @param result  output with found cells
  * @return 0 on success, -1 on failure

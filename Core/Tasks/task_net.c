@@ -14,7 +14,6 @@
 #include "sensorq.h"
 
 #define JSMN_HEADER
-#include "base64.h"
 #include "fws.h"
 #include "hmac.h"
 #include "jsmn.h"
@@ -26,7 +25,7 @@
 #define TAG "NET"
 
 #define JSON_MAX_TOKENS       8
-#define MAX_RECORDS_PER_BATCH 10
+#define MAX_RECORDS_PER_BATCH 56
 #define SEND_RETRIES          3
 #define REQUEST_BODY_SIZE     1024
 
@@ -36,19 +35,11 @@
 
 extern volatile struct bl_params bl;
 
-struct sensor_item {
-    uint32_t value;
-    uint32_t timestamp;
-};
-
-#define SENSORS_BUF_LEN (MAX_RECORDS_PER_BATCH * sizeof(struct sensor_item))
-#define SENSORS_STR_LEN (4 * ((SENSORS_BUF_LEN + 2) / 3) + 1)
-
 struct net_ctx {
     struct logger* logger;
     char* url;
     char* hmac;
-    char* body;
+    void* body;
     size_t body_size;
 };
 
@@ -119,8 +110,11 @@ static void response_free(struct sim800l_http_response* response) {
 }
 
 /******************************************************************************/
-/* Sensor data encoding                                                       */
+/* Sensor data encoding (binary)                                              */
 /******************************************************************************/
+
+#define DATA_HEADER_SIZE 14
+#define DATA_RECORD_SIZE 18
 
 static int sensor_read(struct sensorq* queue,
                        struct sensor_record* records,
@@ -128,32 +122,56 @@ static int sensor_read(struct sensorq* queue,
     return sensorq_peek(queue, records, max_count);
 }
 
-static void sensor_field_encode(struct sensor_record* records,
-                                int count,
-                                size_t field_offset,
-                                int is_signed,
-                                int scale,
-                                char* output) {
-    struct sensor_item items[MAX_RECORDS_PER_BATCH];
-    size_t encoded_length;
+/*
+ * Build binary data payload into `out` buffer.
+ * Reads sensor records directly into the payload body (zero-copy).
+ *
+ * Header (14 bytes, little-endian):
+ *   0..3   uint32  uid
+ *   4..7   uint32  ts
+ *   8..11  uint32  ticks
+ *   12     uint8   tamper (0/1)
+ *   13     uint8   records count
+ *
+ * Records (N × 18 bytes each, little-endian):
+ *   0..3   uint32  timestamp
+ *   4..5   uint16  voltage (mV)
+ *   6..7   int16   temperature (centidegrees C)
+ *   8..9   uint16  humidity (centipercent RH)
+ *   10..11 uint16  angle (centidegrees)
+ *   12..13 uint16  count_avg
+ *   14..15 uint16  count_min
+ *   16..17 uint16  count_max
+ *
+ * Returns total payload size in bytes.
+ * Writes number of records read into *record_count_out.
+ */
+static size_t build_data_binary(void* out,
+                                size_t out_size,
+                                struct sensorq* queue,
+                                int* record_count_out) {
+    uint8_t* p      = (uint8_t*)out;
+    int max_records = (int)((out_size - DATA_HEADER_SIZE) / DATA_RECORD_SIZE);
 
-    for (int i = 0; i < count; i++) {
-        const uint8_t* p = (const uint8_t*)&records[i] + field_offset;
-        int32_t raw;
-        if (is_signed) {
-            raw = *(const int16_t*)p;
-        } else {
-            raw = *(const uint16_t*)p;
-        }
-        items[i].timestamp = records[i].timestamp;
-        items[i].value     = (uint32_t)(raw * scale);
+    if (max_records > MAX_RECORDS_PER_BATCH) {
+        max_records = MAX_RECORDS_PER_BATCH;
     }
 
-    base64_encode((unsigned char*)items,
-                  sizeof(struct sensor_item) * count,
-                  output,
-                  &encoded_length);
-    output[encoded_length] = '\0';
+    /* Read records directly into payload body (struct layout = wire format) */
+    struct sensor_record* records =
+        (struct sensor_record*)(p + DATA_HEADER_SIZE);
+    int record_count  = sensor_read(queue, records, max_records);
+    *record_count_out = record_count;
+
+    /* Header */
+    memcpy(p + 0, &params.id, 4);
+    memcpy(p + 4, (const void*)&timestamp, 4);
+    uint32_t ticks = xTaskGetTickCount();
+    memcpy(p + 8, &ticks, 4);
+    p[12] = READ_TAMPER ? 1 : 0;
+    p[13] = (uint8_t)record_count;
+
+    return DATA_HEADER_SIZE + (size_t)record_count * DATA_RECORD_SIZE;
 }
 
 /******************************************************************************/
@@ -208,12 +226,40 @@ static int request_post(struct net_ctx* ctx, const char* api) {
     strcpy(ctx->url, params.url_app);
     strcat(ctx->url, api);
 
-    hmac_base64(params.secret, ctx->body, strlen(ctx->body), ctx->hmac);
+    hmac_base64(params.secret,
+                ctx->body,
+                strlen((const char*)ctx->body),
+                ctx->hmac);
 
     request.type        = MODEM_REQ_HTTP_POST;
     request.url         = ctx->url;
     request.auth_header = ctx->hmac;
     request.body        = ctx->body;
+    request.response    = &response;
+
+    int result = modem_execute(&request);
+
+    response_free(&response);
+
+    return (result == 200) ? 0 : -1;
+}
+
+static int request_post_bin(struct net_ctx* ctx,
+                            const char* api,
+                            size_t body_len) {
+    struct sim800l_http_response response = {0};
+    struct modem_request request          = {0};
+
+    strcpy(ctx->url, params.url_app);
+    strcat(ctx->url, api);
+
+    hmac_base64(params.secret, ctx->body, body_len, ctx->hmac);
+
+    request.type        = MODEM_REQ_HTTP_POST_BIN;
+    request.url         = ctx->url;
+    request.auth_header = ctx->hmac;
+    request.body        = ctx->body;
+    request.body_length = body_len;
     request.response    = &response;
 
     int result = modem_execute(&request);
@@ -302,87 +348,6 @@ static void build_cnet_payload(char* request,
     }
 }
 
-static void build_data_payload(char* request,
-                               size_t size,
-                               struct sensor_record* records,
-                               int record_count,
-                               int voltage) {
-    char encoded[SENSORS_STR_LEN];
-
-    strjson_init(request, size);
-    strjson_uint(request, size, "uid", params.id);
-    strjson_uint(request, size, "ts", timestamp);
-    strjson_uint(request, size, "ticks", xTaskGetTickCount());
-
-    if (voltage) {
-        strjson_int(request, size, "bat", voltage);
-    }
-
-    if (record_count > 0) {
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, count_avg),
-                            0,
-                            1,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "count", encoded);
-        }
-
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, count_min),
-                            0,
-                            1,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "count_min", encoded);
-        }
-
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, count_max),
-                            0,
-                            1,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "count_max", encoded);
-        }
-
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, temperature),
-                            1,
-                            10,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "temp", encoded);
-        }
-
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, humidity),
-                            0,
-                            10,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "hum", encoded);
-        }
-
-        sensor_field_encode(records,
-                            record_count,
-                            offsetof(struct sensor_record, angle),
-                            0,
-                            10,
-                            encoded);
-        if (*encoded) {
-            strjson_str(request, size, "angle", encoded);
-        }
-    }
-
-    strjson_int(request, size, "tamper", READ_TAMPER);
-}
-
 /******************************************************************************/
 /* Task entry point                                                           */
 /******************************************************************************/
@@ -460,27 +425,16 @@ void task_net(void* argument) {
             }
         }
 
-        /* Read voltage */
-        xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
-        int voltage = task_ctx->actual->voltage;
-        xSemaphoreGive(task_ctx->actual->mutex);
-
-        /* Read sensor records from queue */
-        struct sensor_record records[MAX_RECORDS_PER_BATCH];
-        int record_count = sensor_read(queue, records, MAX_RECORDS_PER_BATCH);
-
-        /* Build data payload */
-        build_data_payload(ctx.body,
-                           ctx.body_size,
-                           records,
-                           record_count,
-                           voltage);
+        /* Build binary data payload (reads from queue into body buffer) */
+        int record_count;
+        size_t body_len =
+            build_data_binary(ctx.body, ctx.body_size, queue, &record_count);
 
         /* Try to send with retries */
         led_blink(4);
         bool sent = false;
         for (int attempt = 0; attempt < SEND_RETRIES; attempt++) {
-            if (request_post(&ctx, "/api/data") == 0) {
+            if (request_post_bin(&ctx, "/api/data", body_len) == 0) {
                 sent = true;
                 break;
             }
