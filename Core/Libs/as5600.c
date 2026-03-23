@@ -1,8 +1,5 @@
 /*
  * AS5600 contactless potentiometer
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025
  */
 
 #include "as5600.h"
@@ -24,16 +21,16 @@
 
 /******************************************************************************/
 
-void as5600_init(struct as5600* sen, I2C_HandleTypeDef* i2c) {
-    memset(sen, 0, sizeof(*sen));
-    sen->i2c = i2c;
+void as5600_init(struct as5600* self, I2C_HandleTypeDef* i2c) {
+    memset(self, 0, sizeof(*self));
+    self->i2c = i2c;
 }
 
-static int get_status(struct as5600* sen) {
+static int get_status(struct as5600* self) {
     HAL_StatusTypeDef status;
     uint8_t buf;
 
-    status = HAL_I2C_Mem_Read(sen->i2c,
+    status = HAL_I2C_Mem_Read(self->i2c,
                               I2C_ADDRESS,
                               I2C_REG_STATUS,
                               I2C_MEMADD_SIZE_8BIT,
@@ -49,23 +46,23 @@ static int get_status(struct as5600* sen) {
 }
 
 /******************************************************************************/
-int as5600_is_available(struct as5600* sen) {
-    return get_status(sen) < 0 ? -1 : 0;
+int as5600_is_available(struct as5600* self) {
+    return get_status(self) < 0 ? -1 : 0;
 }
 
 /******************************************************************************/
-int as5600_status(struct as5600* sen) {
-    int status = get_status(sen);
+int as5600_status(struct as5600* self) {
+    int status = get_status(self);
     return status < 0 ? -1 : status & REG_STATUS_MASK;
 }
 
 /******************************************************************************/
-int32_t as5600_read(struct as5600* sen) {
+int32_t as5600_read(struct as5600* self) {
     HAL_StatusTypeDef status;
     uint8_t buf[2];
     int32_t angle;
 
-    status = HAL_I2C_Mem_Read(sen->i2c,
+    status = HAL_I2C_Mem_Read(self->i2c,
                               I2C_ADDRESS,
                               I2C_REG_ANGLE_HIGH,
                               I2C_MEMADD_SIZE_8BIT,

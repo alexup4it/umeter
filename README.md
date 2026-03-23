@@ -35,9 +35,9 @@ Request JSON:
 |apn|string|APN for cellular network|
 |url_ota|string|OTA server URL|
 |url_app|string|Application server URL|
-|period_app|uint32|Communication with application server period (seconds)|
-|period_sen|uint32|Sensors data update period (seconds)|
-|mtime_count|uint32|Measurement time for counter (seconds)|
+|period_upload|uint32|Communication with application server period (seconds)|
+|period_sensors|uint32|Sensors data update period (seconds)|
+|period_anemometer|uint32|Measurement time for anemometer (seconds)|
 |sens|int32|[Available sensors](#available-sensors) bit mask|
 
 Response JSON:
@@ -68,7 +68,7 @@ Response JSON:
 
 ### /api/data
 POST `Content-Type: application/octet-stream`  
-_Every_ `period_app` _seconds_  
+_Every_ `period_upload` _seconds_  
 Send device state and sensor measurements in compact binary format
 
 Request body is raw binary (little-endian throughout):
@@ -89,10 +89,10 @@ Request body is raw binary (little-endian throughout):
 |4|2|uint16|Battery voltage (mV)|
 |6|2|int16|Temperature (0.01 °C)|
 |8|2|uint16|Humidity (0.01 %RH)|
-|10|2|uint16|Angle (0.01°)|
-|12|2|uint16|Counter average (per `mtime_count` seconds)|
-|14|2|uint16|Counter minimum (per `mtime_count` seconds)|
-|16|2|uint16|Counter maximum (per `mtime_count` seconds)|
+|10|2|uint16|Wind direction (0.01°)|
+|12|2|uint16|Wind speed average (per `period_anemometer` seconds)|
+|14|2|uint16|Wind speed minimum (per `period_anemometer` seconds)|
+|16|2|uint16|Wind speed maximum (per `period_anemometer` seconds)|
 
 Total payload size: 14 + N × 18 bytes (max N = 56, max payload = 1022 bytes)
 
@@ -113,14 +113,14 @@ Response JSON:
 |6|Error: could not erase internal memory|
 
 ### Available sensors
-|Bit|Sensor|
-|-|-|
-|0x01 (xxxx xxx1)|Voltage|
-|0x02 (xxxx xx1x)|Counter _(not used)_|
-|0x04 (xxxx x1xx)|TMPx75 _(not used)_|
-|0x08 (xxxx 1xxx)|AHT20|
-|0x10 (xxx1 xxxx)|Distance _(not used)_|
-|0x20 (xx1x xxxx)|AS5600|
+|Bit| Sensor                  |
+|-|-------------------------|
+|0x01 (xxxx xxx1)| Voltage                 |
+|0x02 (xxxx xx1x)| Anemometer _(not used)_ |
+|0x04 (xxxx x1xx)| TMPx75 _(not used)_     |
+|0x08 (xxxx 1xxx)| AHT20                   |
+|0x10 (xxx1 xxxx)| Distance _(not used)_   |
+|0x20 (xx1x xxxx)| AS5600                  |
 
 ## OTA API
 **_?_**

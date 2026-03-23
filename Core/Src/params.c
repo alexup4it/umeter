@@ -89,10 +89,10 @@ static void set_default(params_t* params) {
     strcpy(params->url_app, "app.proshutinsky.ru");
     uid_string(params->mcu_uid);
     memset(params->secret, 0xAB, sizeof(params->secret));
-    params->period_app   = 60 * 5;
-    params->period_sen   = 60;
-    params->mtime_count  = 10;
-    params->offset_angle = 0;
+    params->period_upload     = 60 * 5;
+    params->period_sensors    = 60;
+    params->period_anemometer = 10;
+    params->offset_angle      = 0;
 }
 
 void params_init(void) {

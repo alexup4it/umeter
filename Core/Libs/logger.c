@@ -18,9 +18,9 @@
 volatile uint8_t log_usb_active = 0;
 
 /******************************************************************************/
-void logger_init(struct logger* logger, struct siface* siface) {
-    memset(logger, 0, sizeof(*logger));
-    logger->siface = siface;
+void logger_init(struct logger* self, struct siface* siface) {
+    memset(self, 0, sizeof(*self));
+    self->siface = siface;
 }
 
 /******************************************************************************/
@@ -67,7 +67,7 @@ static size_t escape_copy(char* dst, const char* buf, size_t len) {
 
 /******************************************************************************/
 #ifdef LOGGER
-int logger_add(struct logger* logger,
+int logger_add(struct logger* self,
                enum log_level level,
                const char* tag,
                bool full,
@@ -121,7 +121,7 @@ int logger_add(struct logger* logger,
     log[hdr_len + written + 1] = '\n';
     log[hdr_len + written + 2] = '\0';
 
-    ret = siface_add(logger->siface, log);
+    ret = siface_add(self->siface, log);
     if (ret < 0) {
         vPortFree(log);
         return -1;
@@ -133,11 +133,11 @@ int logger_add(struct logger* logger,
 
 /******************************************************************************/
 #ifdef LOGGER
-int logger_add_str(struct logger* logger,
+int logger_add_str(struct logger* self,
                    enum log_level level,
                    const char* tag,
                    bool full,
                    const char* buf) {
-    return logger_add(logger, level, tag, full, buf, strlen(buf));
+    return logger_add(self, level, tag, full, buf, strlen(buf));
 }
 #endif

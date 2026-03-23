@@ -9,7 +9,7 @@
 #include "aht20.h"
 #include "as5600.h"
 #include "avoltage.h"
-#include "counter.h"
+#include "freqmeter.h"
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
@@ -20,6 +20,7 @@
 
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
+
 enum {
     AVAIL_VOL    = 0x01,
     AVAIL_CNT    = 0x02,
@@ -44,18 +45,18 @@ void task_sensors(void* argument) {
     int drdy;
     int ret;
 
-    int32_t temperature = 0;
-    int32_t humidity    = 0;
-    int32_t angle_wo    = 0;
-    int32_t angle       = 0;
-    int voltage         = 0;
+    int32_t temperature        = 0;
+    int32_t humidity           = 0;
+    int32_t wind_direction     = 0;
+    int32_t wind_direction_raw = 0;
+    int voltage                = 0;
     uint32_t ts;
 
     char* tmp;
 
     /* Check sensor availability */
 #ifdef AVOLTAGE_CALIB
-    ret = avoltage_calib(ctx->avlt);
+    ret = avoltage_calib(ctx->voltage);
     if (!ret) {
         avail |= AVAIL_VOL;
     }
@@ -63,14 +64,14 @@ void task_sensors(void* argument) {
     avail |= AVAIL_VOL;
 
     ctx->aht20_on();
-    ret = aht20_is_available(ctx->aht);
+    ret = aht20_is_available(ctx->aht20);
     ctx->aht20_off();
     if (!ret) {
         avail |= AVAIL_AHT20;
     }
 
     ctx->as5600_on();
-    ret = as5600_is_available(ctx->pot);
+    ret = as5600_is_available(ctx->as5600);
     ctx->as5600_off();
     if (!ret) {
         avail |= AVAIL_AS5600;
@@ -101,7 +102,7 @@ void task_sensors(void* argument) {
 
         if (avail & AVAIL_VOL) {
             ctx->avoltage_on();
-            voltage = avoltage(ctx->avlt);
+            voltage = avoltage(ctx->voltage);
             ctx->avoltage_off();
             if (voltage >= 0) {
                 drdy |= DRDY_VOL;
@@ -109,7 +110,7 @@ void task_sensors(void* argument) {
         }
         if (avail & AVAIL_AHT20) {
             ctx->aht20_on();
-            ret = aht20_read(ctx->aht, &temperature, &humidity);
+            ret = aht20_read(ctx->aht20, &temperature, &humidity);
             ctx->aht20_off();
             if (!ret) {
                 drdy |= DRDY_TMP | DRDY_HUM;
@@ -117,15 +118,16 @@ void task_sensors(void* argument) {
         }
         if (avail & AVAIL_AS5600) {
             ctx->as5600_on();
-            angle = as5600_read(ctx->pot);
+            wind_direction_raw = as5600_read(ctx->as5600);
             ctx->as5600_off();
-            if (angle >= 0) {
+            if (wind_direction_raw >= 0) {
                 drdy |= DRDY_ANG;
 
-                if (angle >= params.offset_angle) {
-                    angle_wo = angle - params.offset_angle;
+                if (wind_direction_raw >= params.offset_angle) {
+                    wind_direction = wind_direction_raw - params.offset_angle;
                 } else {
-                    angle_wo = ANGLE_MAX + angle - params.offset_angle;
+                    wind_direction =
+                        ANGLE_MAX + wind_direction_raw - params.offset_angle;
                 }
             }
         }
@@ -143,13 +145,13 @@ void task_sensors(void* argument) {
             ctx->actual->humidity = humidity;
         }
         if (drdy & DRDY_ANG) {
-            ctx->actual->angle = angle_wo;
+            ctx->actual->wind_direction = wind_direction;
         }
         xSemaphoreGive(ctx->actual->mutex);
 
         {
             struct sensor_record rec;
-            struct counter_accum ca;
+            struct freqmeter_accum ca;
 
             memset(&rec, 0, sizeof(rec));
             rec.timestamp = ts;
@@ -163,13 +165,13 @@ void task_sensors(void* argument) {
                 rec.humidity = (uint16_t)(humidity / 10);
             }
             if (drdy & DRDY_ANG) {
-                rec.angle = (uint16_t)(angle_wo / 10);
+                rec.wind_direction = (uint16_t)(wind_direction / 10);
             }
 
-            counter_accum_read(ctx->cnt, &ca);
-            rec.count_avg = (uint16_t)ca.avg;
-            rec.count_min = (uint16_t)ca.min;
-            rec.count_max = (uint16_t)ca.max;
+            freqmeter_accum_read(ctx->cnt, &ca);
+            rec.wind_speed_avg = (uint16_t)ca.avg;
+            rec.wind_speed_min = (uint16_t)ca.min;
+            rec.wind_speed_max = (uint16_t)ca.max;
 
             sensorq_push(ctx->queue, &rec);
         }

@@ -34,13 +34,13 @@ struct sensorq;
 
 struct __attribute__((packed)) sensor_record {
     uint32_t timestamp;
-    uint16_t voltage;    /* millivolts              */
-    int16_t temperature; /* centidegrees C (0.01°C) */
-    uint16_t humidity;   /* centipercent RH (0.01%) */
-    uint16_t angle;      /* centidegrees (0.01°)    */
-    uint16_t count_avg;
-    uint16_t count_min;
-    uint16_t count_max;
+    uint16_t voltage;        /* millivolts              */
+    int16_t temperature;     /* centidegrees C (0.01°C) */
+    uint16_t humidity;       /* centipercent RH (0.01%) */
+    uint16_t wind_direction; /* centidegrees (0.01°)    */
+    uint16_t wind_speed_avg;
+    uint16_t wind_speed_min;
+    uint16_t wind_speed_max;
 };
 
 _Static_assert(sizeof(struct sensor_record) == 18,
@@ -66,7 +66,7 @@ void task_button_irq_notify_from_isr(void);
 struct as5600;
 struct aht20;
 struct avoltage;
-struct counter;
+struct freqmeter;
 struct button;
 struct siface;
 struct sim800l;
@@ -96,7 +96,7 @@ struct task_watchdog_ctx {
 
 struct task_anemometer_ctx {
     struct actual* actual;
-    struct counter* cnt;
+    struct freqmeter* cnt;
     pm_fn anemometer_on;
     pm_fn anemometer_off;
 };
@@ -104,10 +104,10 @@ struct task_anemometer_ctx {
 struct task_sensors_ctx {
     struct actual* actual;
     struct sensorq* queue;
-    struct as5600* pot;
-    struct aht20* aht;
-    struct avoltage* avlt;
-    struct counter* cnt;
+    struct as5600* as5600;
+    struct aht20* aht20;
+    struct avoltage* voltage;
+    struct freqmeter* cnt;
     struct logger* logger;
     pm_fn as5600_on;
     pm_fn as5600_off;

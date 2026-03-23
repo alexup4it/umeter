@@ -1,8 +1,5 @@
 /*
  * Button
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025-2026
  */
 
 #ifndef BUTTON_H_
@@ -21,10 +18,10 @@ struct button {
     uint8_t ignore_active;
 };
 
-void button_init(struct button* btn,
+void button_init(struct button* self,
                  button_callback_t callback,
                  uint32_t debounce_ms);
-int button_irq_callback(struct button* btn, int is_pressed, uint32_t now_ms);
-void button_dispatch(struct button* btn);
+int button_irq_callback(struct button* self, int is_pressed, uint32_t now_ms);
+void button_dispatch(struct button* self);
 
 #endif /* BUTTON_H_ */

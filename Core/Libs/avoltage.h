@@ -1,8 +1,5 @@
 /*
  * Analog voltage meter
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #ifndef AVOLTAGE_H_
@@ -18,8 +15,8 @@ struct avoltage {
     int ratio;
 };
 
-void avoltage_init(struct avoltage* avlt, ADC_HandleTypeDef* adc, int ratio);
-int avoltage_calib(struct avoltage* avlt);
-int avoltage(struct avoltage* avlt);
+void avoltage_init(struct avoltage* self, ADC_HandleTypeDef* adc, int ratio);
+int avoltage_calib(struct avoltage* self);
+int avoltage(struct avoltage* self);
 
 #endif /* AVOLTAGE_H_ */

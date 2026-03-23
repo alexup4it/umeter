@@ -38,7 +38,7 @@
 #include "as5600.h"
 #include "avoltage.h"
 #include "button.h"
-#include "counter.h"
+#include "freqmeter.h"
 #include "fws.h"
 #include "i2c.h"
 #include "logger.h"
@@ -93,7 +93,7 @@ extern const uint32_t* _app;
 static struct actual actual;
 static struct as5600 pot;
 static struct aht20 aht;
-static struct counter cnt;
+static struct freqmeter cnt;
 static struct avoltage avlt;
 static struct button btn;
 static struct siface siface;
@@ -244,12 +244,12 @@ struct task_anemometer_ctx task_anemometer_ctx = {
 };
 
 struct task_sensors_ctx task_sensors_ctx = {
-    .actual = &actual,
-    .queue  = &sensorq,
-    .pot    = &pot,
-    .aht    = &aht,
-    .avlt   = &avlt,
-    .cnt    = &cnt,
+    .actual  = &actual,
+    .queue   = &sensorq,
+    .as5600  = &pot,
+    .aht20   = &aht,
+    .voltage = &avlt,
+    .cnt     = &cnt,
 #ifdef LOGGER
     .logger = &logger,
 #endif
@@ -342,7 +342,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     }
 
     if (GPIO_Pin == EXTI0_HALL_Pin) {
-        counter_irq(&cnt);
+        freqmeter_irq(&cnt);
         return;
     }
 
@@ -453,7 +453,7 @@ int main(void) {
     modem_init();
     as5600_init(&pot, &hi2c1);
     aht20_init(&aht, &hi2c2);
-    counter_init(&cnt);
+    freqmeter_init(&cnt);
     avoltage_init(&avlt, &hadc1, 2);
 
     sensorq_init(&sensorq, sensorq_buf, SENSORS_QUEUE_CAPACITY);

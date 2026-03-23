@@ -138,10 +138,10 @@ static int sensor_read(struct sensorq* queue,
  *   4..5   uint16  voltage (mV)
  *   6..7   int16   temperature (centidegrees C)
  *   8..9   uint16  humidity (centipercent RH)
- *   10..11 uint16  angle (centidegrees)
- *   12..13 uint16  count_avg
- *   14..15 uint16  count_min
- *   16..17 uint16  count_max
+ *   10..11 uint16  wind_direction (centidegrees)
+ *   12..13 uint16  wind_speed_avg
+ *   14..15 uint16  wind_speed_min
+ *   16..17 uint16  wind_speed_max
  *
  * Returns total payload size in bytes.
  * Writes number of records read into *record_count_out.
@@ -309,9 +309,9 @@ static void build_info_payload(char* request,
     strjson_str(request, size, "apn", params.apn);
     strjson_str(request, size, "url_ota", params.url_ota);
     strjson_str(request, size, "url_app", params.url_app);
-    strjson_uint(request, size, "period_app", params.period_app);
-    strjson_uint(request, size, "period_sen", params.period_sen);
-    strjson_uint(request, size, "mtime_count", params.mtime_count);
+    strjson_uint(request, size, "period_upload", params.period_upload);
+    strjson_uint(request, size, "period_sensors", params.period_sensors);
+    strjson_uint(request, size, "period_anemometer", params.period_anemometer);
     strjson_int(request, size, "sens", available_sensors);
 }
 

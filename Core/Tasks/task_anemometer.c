@@ -1,8 +1,8 @@
 /*
- * Anemometer (pulse counter) task
+ * Anemometer task
  *
  * Event-driven: the task sleeps (allowing MCU Stop mode) between
- * hall-sensor pulses.  counter_irq() sends a task notification on
+ * hall-sensor pulses.  freqmeter_irq() sends a task notification on
  * each EXTI edge, so the MCU wakes only to record the timestamp
  * and immediately goes back to sleep.
  *
@@ -11,20 +11,20 @@
  */
 
 #include "actual.h"
-#include "counter.h"
+#include "freqmeter.h"
 #include "ptasks.h"
 
 /* Measurement window duration (ms) */
-#define COUNTER_MEAS_TIME_MS 3000
+#define FREQMETER_MEAS_TIME_MS 3000
 
 /* Stabilization time after power on (ms) */
-#define COUNTER_STABILIZE_MS 10
+#define FREQMETER_STABILIZE_MS 10
 
 /*
  * Timeout for the first pulse (ms).
  * If no pulse arrives within this time, assume zero wind.
  */
-#define COUNTER_FIRST_PULSE_TIMEOUT_MS (COUNTER_MEAS_TIME_MS / 2)
+#define FREQMETER_FIRST_PULSE_TIMEOUT_MS (FREQMETER_MEAS_TIME_MS / 2)
 
 void task_anemometer(void* argument) {
     struct task_anemometer_ctx* ctx = argument;
@@ -41,10 +41,10 @@ void task_anemometer(void* argument) {
 
         /* Power on and stabilize */
         ctx->anemometer_on();
-        osDelay(pdMS_TO_TICKS(COUNTER_STABILIZE_MS));
+        osDelay(pdMS_TO_TICKS(FREQMETER_STABILIZE_MS));
 
         /* Reset counter and register for notifications */
-        counter_reset(ctx->cnt);
+        freqmeter_reset(ctx->cnt);
         ctx->cnt->notify_task = xTaskGetCurrentTaskHandle();
 
         /* Clear any stale notifications */
@@ -55,7 +55,7 @@ void task_anemometer(void* argument) {
          * MCU is free to enter Stop mode during this wait.
          */
         if (ulTaskNotifyTake(pdTRUE,
-                             pdMS_TO_TICKS(COUNTER_FIRST_PULSE_TIMEOUT_MS)) ==
+                             pdMS_TO_TICKS(FREQMETER_FIRST_PULSE_TIMEOUT_MS)) ==
             0) {
             /* Timeout — no wind */
             goto done;
@@ -67,9 +67,9 @@ void task_anemometer(void* argument) {
          */
         {
             TickType_t deadline =
-                xTaskGetTickCount() + pdMS_TO_TICKS(COUNTER_MEAS_TIME_MS);
+                xTaskGetTickCount() + pdMS_TO_TICKS(FREQMETER_MEAS_TIME_MS);
 
-            while (ctx->cnt->period_cnt < COUNTER_MIN_PERIODS) {
+            while (ctx->cnt->period_cnt < FREQMETER_MIN_PERIODS) {
                 TickType_t now = xTaskGetTickCount();
                 TickType_t remain;
 
@@ -89,17 +89,17 @@ void task_anemometer(void* argument) {
         /* Stop listening */
         ctx->cnt->notify_task = NULL;
 
-        value = counter_speed(ctx->cnt);
+        value = freqmeter_speed(ctx->cnt);
 
         ctx->anemometer_off();
 
         /* Update actual value */
         xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
-        ctx->actual->count = value;
+        ctx->actual->wind_speed = value;
         xSemaphoreGive(ctx->actual->mutex);
 
         /* Update accumulator for min/avg/max aggregation */
-        counter_accum_update(ctx->cnt, value);
+        freqmeter_accum_update(ctx->cnt, value);
 
         /* Signal completion to scheduler */
         xEventGroupSetBits(task_events, TASK_EVENT_ANEMOMETER_DONE);

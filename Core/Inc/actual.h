@@ -14,12 +14,12 @@ struct actual {
     int avail;
 
     int voltage;
-    uint32_t count;
-    int32_t angle;
+    uint32_t wind_speed;
+    int32_t wind_direction;
     int32_t humidity;
     int32_t temperature;
 };
 
-void actual_init(struct actual* a);
+void actual_init(struct actual* self);
 
 #endif /* ACTUAL_H_ */

@@ -1,8 +1,5 @@
 /*
  * AHT20 humidity and temperature sensor
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #include "aht20.h"
@@ -30,17 +27,17 @@
 static const uint8_t cmd_init[] = {0xBE, 0x08, 0x00};
 static const uint8_t cmd_meas[] = {0xAC, 0x33, 0x00};
 
-void aht20_init(struct aht20* sen, I2C_HandleTypeDef* i2c) {
-    memset(sen, 0, sizeof(*sen));
-    sen->i2c = i2c;
+void aht20_init(struct aht20* self, I2C_HandleTypeDef* i2c) {
+    memset(self, 0, sizeof(*self));
+    self->i2c = i2c;
 }
 
 /******************************************************************************/
-int aht20_is_available(struct aht20* sen) {
+int aht20_is_available(struct aht20* self) {
     HAL_StatusTypeDef status;
     uint8_t buf;
 
-    status = HAL_I2C_Mem_Read(sen->i2c,
+    status = HAL_I2C_Mem_Read(self->i2c,
                               I2C_ADDRESS,
                               I2C_CMD_STATUS,
                               I2C_MEMADD_SIZE_8BIT,
@@ -73,14 +70,14 @@ static uint8_t calc_crc8(uint8_t* data, size_t size) {
 }
 
 /******************************************************************************/
-int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
+int aht20_read(struct aht20* self, int32_t* temp, int32_t* hum) {
     HAL_StatusTypeDef status;
     uint32_t raw_temp;
     uint32_t raw_hum;
     uint8_t buf[7];
 
     /* Status */
-    status = HAL_I2C_Mem_Read(sen->i2c,
+    status = HAL_I2C_Mem_Read(self->i2c,
                               I2C_ADDRESS,
                               I2C_CMD_STATUS,
                               I2C_MEMADD_SIZE_8BIT,
@@ -93,7 +90,7 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
 
     /* Not calibrated */
     if ((buf[0] & I2C_STATUS_CALIB_MASK) == 0) {
-        status = HAL_I2C_Master_Transmit(sen->i2c,
+        status = HAL_I2C_Master_Transmit(self->i2c,
                                          I2C_ADDRESS,
                                          (uint8_t*)cmd_init,
                                          sizeof(cmd_init),
@@ -105,7 +102,7 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
     }
 
     /* Trigger measurement */
-    status = HAL_I2C_Master_Transmit(sen->i2c,
+    status = HAL_I2C_Master_Transmit(self->i2c,
                                      I2C_ADDRESS,
                                      (uint8_t*)cmd_meas,
                                      sizeof(cmd_meas),
@@ -117,7 +114,7 @@ int aht20_read(struct aht20* sen, int32_t* temp, int32_t* hum) {
         100)); /* "Wait for 80ms for the measurement to be completed" */
 
     /* Receive data */
-    status = HAL_I2C_Master_Receive(sen->i2c,
+    status = HAL_I2C_Master_Receive(self->i2c,
                                     I2C_ADDRESS,
                                     buf,
                                     sizeof(buf),

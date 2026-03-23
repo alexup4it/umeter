@@ -30,19 +30,19 @@ struct siface {
     void* context;
 };
 
-void siface_init(struct siface* siface, /*UART_HandleTypeDef *uart,*/
+void siface_init(struct siface* self, /*UART_HandleTypeDef *uart,*/
                  size_t qsize,
                  siface_cb callback,
                  void* context);
-void siface_wakeup(struct siface* siface);
-void siface_rx_irq(struct siface* siface, const char* buf, size_t len);
-void siface_tx_irq(struct siface* siface);
-void siface_task(struct siface* siface);
+void siface_wakeup(struct siface* self);
+void siface_rx_irq(struct siface* self, const char* buf, size_t len);
+void siface_tx_irq(struct siface* self);
+void siface_task(struct siface* self);
 
 /**
  * @brief: Add string to serial interface queue
  * @note: buf must be dynamically allocated with pvPortMalloc
  */
-int siface_add(struct siface* siface, const char* buf);
+int siface_add(struct siface* self, const char* buf);
 
 #endif /* SIFACE_H_ */

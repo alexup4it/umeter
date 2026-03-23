@@ -1,8 +1,5 @@
 /*
  * Application interface
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2025
  */
 
 #include "appiface.h"
@@ -56,7 +53,7 @@ static int hextostr(const char* hexstr,
     return 0;
 }
 
-static int parse(struct appiface* appif,
+static int parse(struct appiface* self,
                  const char* request,
                  char* response,
                  size_t resp_size) {
@@ -125,53 +122,56 @@ static int parse(struct appiface* appif,
         } else if (jsoneq(request, tparam, "mcu") == 0) {
             strjson_str(response, resp_size, "mcu", params.mcu_uid);
         } else if (jsoneq(request, tparam, "apn") == 0) {
-            strjson_str(response, resp_size, "apn", appif->uparams.apn);
+            strjson_str(response, resp_size, "apn", self->uparams.apn);
         } else if (jsoneq(request, tparam, "url_ota") == 0) {
-            strjson_str(response, resp_size, "url_ota", appif->uparams.url_ota);
+            strjson_str(response, resp_size, "url_ota", self->uparams.url_ota);
         } else if (jsoneq(request, tparam, "url_app") == 0) {
-            strjson_str(response, resp_size, "url_app", appif->uparams.url_app);
-        } else if (jsoneq(request, tparam, "period_app") == 0) {
+            strjson_str(response, resp_size, "url_app", self->uparams.url_app);
+        } else if (jsoneq(request, tparam, "period_upload") == 0) {
             strjson_uint(response,
                          resp_size,
-                         "period_app",
-                         appif->uparams.period_app);
-        } else if (jsoneq(request, tparam, "period_sen") == 0) {
+                         "period_upload",
+                         self->uparams.period_upload);
+        } else if (jsoneq(request, tparam, "period_sensors") == 0) {
             strjson_uint(response,
                          resp_size,
-                         "period_sen",
-                         appif->uparams.period_sen);
-        } else if (jsoneq(request, tparam, "mtime_count") == 0) {
+                         "period_sensors",
+                         self->uparams.period_sensors);
+        } else if (jsoneq(request, tparam, "period_anemometer") == 0) {
             strjson_uint(response,
                          resp_size,
-                         "mtime_count",
-                         appif->uparams.mtime_count);
+                         "period_anemometer",
+                         self->uparams.period_anemometer);
         } else if (jsoneq(request, tparam, "sens") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "sens", appif->actual->avail);
-            xSemaphoreGive(appif->actual->mutex);
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_int(response, resp_size, "sens", self->actual->avail);
+            xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "bat") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_uint(response, resp_size, "bat", appif->actual->voltage);
-            xSemaphoreGive(appif->actual->mutex);
-        } else if (jsoneq(request, tparam, "count") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_uint(response, resp_size, "count", appif->actual->count);
-            xSemaphoreGive(appif->actual->mutex);
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_uint(response, resp_size, "bat", self->actual->voltage);
+            xSemaphoreGive(self->actual->mutex);
+        } else if (jsoneq(request, tparam, "wind_speed") == 0) {
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_uint(response,
+                         resp_size,
+                         "wind_speed",
+                         self->actual->wind_speed);
+            xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "temp") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_int(response, resp_size, "temp", self->actual->temperature);
+            xSemaphoreGive(self->actual->mutex);
+        } else if (jsoneq(request, tparam, "hum") == 0) {
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_int(response, resp_size, "hum", self->actual->humidity);
+            xSemaphoreGive(self->actual->mutex);
+        } else if (jsoneq(request, tparam, "wind_direction") == 0) {
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
             strjson_int(response,
                         resp_size,
-                        "temp",
-                        appif->actual->temperature);
-            xSemaphoreGive(appif->actual->mutex);
-        } else if (jsoneq(request, tparam, "hum") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "hum", appif->actual->humidity);
-            xSemaphoreGive(appif->actual->mutex);
-        } else if (jsoneq(request, tparam, "angle") == 0) {
-            xSemaphoreTake(appif->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "angle", appif->actual->angle);
-            xSemaphoreGive(appif->actual->mutex);
+                        "wind_direction",
+                        self->actual->wind_direction);
+            xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "tamper") == 0) {
             return -1;  // TODO
         } else {
@@ -190,59 +190,59 @@ static int parse(struct appiface* appif,
                 return -1;
             }
 
-            appif->uparams.id = tmp;
+            self->uparams.id = tmp;
         } else if (jsoneq(request, tparam, "apn") == 0) {
-            tmplen = (sizeof(appif->uparams.apn) - 1) < len
-                         ? (sizeof(appif->uparams.apn) - 1)
+            tmplen = (sizeof(self->uparams.apn) - 1) < len
+                         ? (sizeof(self->uparams.apn) - 1)
                          : len;
-            strncpy(appif->uparams.apn, request + tvalue->start, tmplen);
-            appif->uparams.apn[tmplen] = '\0';
+            strncpy(self->uparams.apn, request + tvalue->start, tmplen);
+            self->uparams.apn[tmplen] = '\0';
         } else if (jsoneq(request, tparam, "url_ota") == 0) {
-            tmplen = (sizeof(appif->uparams.url_ota) - 1) < len
-                         ? (sizeof(appif->uparams.url_ota) - 1)
+            tmplen = (sizeof(self->uparams.url_ota) - 1) < len
+                         ? (sizeof(self->uparams.url_ota) - 1)
                          : len;
-            strncpy(appif->uparams.url_ota, request + tvalue->start, tmplen);
-            appif->uparams.url_ota[tmplen] = '\0';
+            strncpy(self->uparams.url_ota, request + tvalue->start, tmplen);
+            self->uparams.url_ota[tmplen] = '\0';
         } else if (jsoneq(request, tparam, "url_app") == 0) {
-            tmplen = (sizeof(appif->uparams.url_app) - 1) < len
-                         ? (sizeof(appif->uparams.url_app) - 1)
+            tmplen = (sizeof(self->uparams.url_app) - 1) < len
+                         ? (sizeof(self->uparams.url_app) - 1)
                          : len;
-            strncpy(appif->uparams.url_app, request + tvalue->start, tmplen);
-            appif->uparams.url_app[tmplen] = '\0';
-        } else if (jsoneq(request, tparam, "period_app") == 0) {
+            strncpy(self->uparams.url_app, request + tvalue->start, tmplen);
+            self->uparams.url_app[tmplen] = '\0';
+        } else if (jsoneq(request, tparam, "period_upload") == 0) {
             tmp = strtoul(request + tvalue->start, NULL, 10);
             if (tmp == 0) {
                 return -1;
             }
 
-            appif->uparams.period_app = tmp;
-        } else if (jsoneq(request, tparam, "period_sen") == 0) {
+            self->uparams.period_upload = tmp;
+        } else if (jsoneq(request, tparam, "period_sensors") == 0) {
             tmp = strtoul(request + tvalue->start, NULL, 10);
             if (tmp == 0) {
                 return -1;
             }
 
-            if (tmp < appif->uparams.mtime_count) {
+            if (tmp < self->uparams.period_anemometer) {
                 return -1;
             }
 
-            appif->uparams.period_sen = tmp;
-        } else if (jsoneq(request, tparam, "mtime_count") == 0) {
+            self->uparams.period_sensors = tmp;
+        } else if (jsoneq(request, tparam, "period_anemometer") == 0) {
             tmp = strtoul(request + tvalue->start, NULL, 10);
             if (tmp == 0) {
                 return -1;
             }
 
-            if (tmp > appif->uparams.period_sen) {
+            if (tmp > self->uparams.period_sensors) {
                 return -1;
             }
 
-            appif->uparams.mtime_count = tmp;
+            self->uparams.period_anemometer = tmp;
         } else if (jsoneq(request, tparam, "secret") == 0) {
             ret = hextostr(request + tvalue->start,
                            len,
-                           appif->uparams.secret,
-                           sizeof(appif->uparams.secret));
+                           self->uparams.secret,
+                           sizeof(self->uparams.secret));
             if (ret < 0) {
                 return -1;
             }
@@ -285,7 +285,7 @@ static int parse(struct appiface* appif,
         }
     } else if (jsoneq(request, tcmd, "save") == 0) {
         vTaskSuspendAll();
-        params_set(&appif->uparams);
+        params_set(&self->uparams);
 
         NVIC_SystemReset();  // --> RESET
     } else if (jsoneq(request, tcmd, "reset") == 0) {

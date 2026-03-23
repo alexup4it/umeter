@@ -40,10 +40,10 @@ extern volatile uint8_t log_usb_active;
 /* Core API                                                                  */
 /*---------------------------------------------------------------------------*/
 
-void logger_init(struct logger* logger, struct siface* siface);
+void logger_init(struct logger* self, struct siface* siface);
 
 #ifdef LOGGER
-int logger_add(struct logger* logger,
+int logger_add(struct logger* self,
                enum log_level level,
                const char* tag,
                bool full,
@@ -61,7 +61,7 @@ inline static int logger_add(struct logger* logger,
 #endif
 
 #ifdef LOGGER
-int logger_add_str(struct logger* logger,
+int logger_add_str(struct logger* self,
                    enum log_level level,
                    const char* tag,
                    bool full,

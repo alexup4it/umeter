@@ -45,9 +45,9 @@ typedef struct {
     char url_app[PARAMS_APP_URL_SIZE];
     char mcu_uid[PARAMS_MCU_UID_SIZE];
     uint8_t secret[HMAC_SECRET_SIZE];
-    uint32_t period_app;
-    uint32_t period_sen;
-    uint32_t mtime_count;
+    uint32_t period_upload;
+    uint32_t period_sensors;
+    uint32_t period_anemometer;
     uint32_t offset_angle;
 } __attribute__((aligned(8))) params_t;
 

@@ -1,8 +1,5 @@
 /*
  * Analog voltage meter
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 // TODO: Wrong ADC values
@@ -19,23 +16,23 @@
 #define MEAS_SETTLE_MS 10
 
 /******************************************************************************/
-void avoltage_init(struct avoltage* avlt, ADC_HandleTypeDef* adc, int ratio) {
-    memset(avlt, 0, sizeof(*avlt));
-    avlt->adc   = adc;
-    avlt->ratio = ratio;
-    avlt->mutex = xSemaphoreCreateMutex();
+void avoltage_init(struct avoltage* self, ADC_HandleTypeDef* adc, int ratio) {
+    memset(self, 0, sizeof(*self));
+    self->adc   = adc;
+    self->ratio = ratio;
+    self->mutex = xSemaphoreCreateMutex();
 
     /* Start with divider off */
 }
 
 /******************************************************************************/
-int avoltage_calib(struct avoltage* avlt) {
+int avoltage_calib(struct avoltage* self) {
     HAL_StatusTypeDef status;
 
-    xSemaphoreTake(avlt->mutex, portMAX_DELAY);
-    //	status = HAL_ADCEx_Calibration_Start(avlt->adc);
+    xSemaphoreTake(self->mutex, portMAX_DELAY);
+    //	status = HAL_ADCEx_Calibration_Start(self->adc);
     status = HAL_OK; /* todo: remove calibration */
-    xSemaphoreGive(avlt->mutex);
+    xSemaphoreGive(self->mutex);
 
     if (status != HAL_OK) {
         return -1;
@@ -45,30 +42,30 @@ int avoltage_calib(struct avoltage* avlt) {
 }
 
 /******************************************************************************/
-int avoltage(struct avoltage* avlt) {
+int avoltage(struct avoltage* self) {
     HAL_StatusTypeDef status;
     uint32_t value;
 
-    xSemaphoreTake(avlt->mutex, portMAX_DELAY);
+    xSemaphoreTake(self->mutex, portMAX_DELAY);
 
     /* Enable voltage divider */
     osDelay(pdMS_TO_TICKS(MEAS_SETTLE_MS));
 
-    status = HAL_ADC_Start(avlt->adc);
+    status = HAL_ADC_Start(self->adc);
     if (status != HAL_OK) {
-        xSemaphoreGive(avlt->mutex);
+        xSemaphoreGive(self->mutex);
         return -1;
     }
 
-    status = HAL_ADC_PollForConversion(avlt->adc, ADC_TIMEOUT);
+    status = HAL_ADC_PollForConversion(self->adc, ADC_TIMEOUT);
     if (status != HAL_OK) {
-        xSemaphoreGive(avlt->mutex);
+        xSemaphoreGive(self->mutex);
         return -1;
     }
 
-    value = HAL_ADC_GetValue(avlt->adc);
+    value = HAL_ADC_GetValue(self->adc);
 
-    xSemaphoreGive(avlt->mutex);
+    xSemaphoreGive(self->mutex);
 
-    return value * avlt->ratio * ADC_REF / ADC_MAX;
+    return value * self->ratio * ADC_REF / ADC_MAX;
 }

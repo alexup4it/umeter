@@ -12,11 +12,11 @@
 
 static TaskHandle_t s_button_task_handle;
 
-static void save_angle_from_actual(struct actual* actual) {
-    int32_t angle;
+static void save_wind_direction_from_actual(struct actual* actual) {
+    int32_t direction;
     params_t uparams;
 
-    /* Reset offset so sensors read raw angle */
+    /* Reset offset so sensors read raw wind_direction */
     params.offset_angle = 0;
 
     /* Trigger a fresh sensor reading with zero offset */
@@ -28,29 +28,29 @@ static void save_angle_from_actual(struct actual* actual) {
                         pdFALSE,
                         portMAX_DELAY);
 
-    /* Now actual->angle == raw angle (offset was 0) */
+    /* Now actual->wind_direction == raw wind_direction (offset was 0) */
     xSemaphoreTake(actual->mutex, portMAX_DELAY);
-    angle = actual->angle;
+    direction = actual->wind_direction;
     xSemaphoreGive(actual->mutex);
 
-    if (angle < 0) {
+    if (direction < 0) {
         return;
     }
 
-    /* Save raw angle as new offset */
+    /* Save raw wind_direction as new offset */
     memcpy(&uparams, &params, sizeof(uparams));
-    uparams.offset_angle = (uint32_t)angle;
+    uparams.offset_angle = (uint32_t)direction;
 
     IWDG_reset();
     vTaskSuspendAll();
     params_set(&uparams);
     xTaskResumeAll();
 
-    params.offset_angle = (uint32_t)angle;
+    params.offset_angle = (uint32_t)direction;
 
-    /* Update actual to reflect zero angle */
+    /* Update actual to reflect zero wind_direction */
     xSemaphoreTake(actual->mutex, portMAX_DELAY);
-    actual->angle = 0;
+    actual->wind_direction = 0;
     xSemaphoreGive(actual->mutex);
 }
 
@@ -74,7 +74,7 @@ void task_button(void* argument) {
     for (;;) {
         notifications = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         while (notifications--) {
-            save_angle_from_actual(ctx->actual);
+            save_wind_direction_from_actual(ctx->actual);
         }
     }
 }
