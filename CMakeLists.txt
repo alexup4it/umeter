@@ -1,7 +1,7 @@
 #THIS FILE IS AUTO GENERATED FROM THE TEMPLATE! DO NOT CHANGE!
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
-cmake_minimum_required(VERSION 4.1)
+cmake_minimum_required(VERSION 3.22)
 
 # specify cross-compilers and tools
 set(CMAKE_C_COMPILER arm-none-eabi-gcc)
@@ -57,19 +57,52 @@ file(GLOB_RECURSE SOURCES "hmac_sha256/*.*" "Core/*.*" "Middlewares/*.*" "Driver
 list(FILTER SOURCES EXCLUDE REGEX "hmac_sha256/examples/")
 list(FILTER SOURCES EXCLUDE REGEX "hmac_sha256/tests/")
 
-set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F401CEUX_FLASH.ld)
-
 add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map)
 add_link_options(-mcpu=cortex-m4 -mthumb -mthumb-interwork)
-add_link_options(-T ${LINKER_SCRIPT})
+# Add linker script only if not already provided by toolchain file
+if(NOT CMAKE_TOOLCHAIN_FILE)
+    add_link_options(-T ${CMAKE_SOURCE_DIR}/STM32F401CEUX_FLASH.ld)
+endif()
 
-add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
+add_executable(${PROJECT_NAME}.elf ${SOURCES} ${CMAKE_SOURCE_DIR}/STM32F401CEUX_FLASH.ld)
 
 set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
 set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)
 
+# Read version info from params.h and create versioned binary (replaces binname.sh)
+file(STRINGS ${CMAKE_SOURCE_DIR}/Core/Inc/params.h PARAMS_LINES)
+foreach(LINE ${PARAMS_LINES})
+    if(LINE MATCHES "#define[ \t]+PARAMS_DEVICE_NAME[ \t]+([^ \t]+)")
+        string(REPLACE "\"" "" DEVICE_NAME "${CMAKE_MATCH_1}")
+    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B1[ \t]+([0-9]+)")
+        set(FW_B1 "${CMAKE_MATCH_1}")
+    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B2[ \t]+([0-9]+)")
+        set(FW_B2 "${CMAKE_MATCH_1}")
+    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B3[ \t]+([0-9]+)")
+        set(FW_B3 "${CMAKE_MATCH_1}")
+    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B4[ \t]+([0-9]+)")
+        set(FW_B4 "${CMAKE_MATCH_1}")
+    endif()
+endforeach()
+set(VERSIONED_BIN "${DEVICE_NAME}-${FW_B1}.${FW_B2}.${FW_B3}.${FW_B4}.bin")
+
+# Generate gitcommit.h with current git hash before compilation
+find_package(Git QUIET)
+if(GIT_FOUND)
+    add_custom_target(prebuild ALL
+            COMMAND ${CMAKE_COMMAND}
+                -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+                -DOUTPUT_FILE=${CMAKE_SOURCE_DIR}/Core/Inc/gitcommit.h
+                -P ${CMAKE_SOURCE_DIR}/cmake/gitcommit.cmake
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Generating gitcommit.h")
+    add_dependencies(${PROJECT_NAME}.elf prebuild)
+endif()
+
 add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}.elf> ${HEX_FILE}
         COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}.elf> ${BIN_FILE}
+        COMMAND ${CMAKE_COMMAND} -E copy ${BIN_FILE} ${PROJECT_BINARY_DIR}/${VERSIONED_BIN}
         COMMENT "Building ${HEX_FILE}
-Building ${BIN_FILE}")
+Building ${BIN_FILE}
+Building ${VERSIONED_BIN}")

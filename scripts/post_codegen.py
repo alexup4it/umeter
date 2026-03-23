@@ -10,9 +10,11 @@ Usage – set as CubeMX "Post-run" script:
   python scripts/post_codegen.py
   python3 scripts/post_codegen.py
 
-CubeMX invokes the script with cwd = project root (where the .ioc file is).
+CubeMX sets cwd to its own install directory, so the script derives
+the project root from its own location (tools/ -> ..).
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,20 +113,23 @@ def run_clang_format(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    root = Path.cwd()
+    # Derive project root from this script's location: tools/ -> project root.
+    # Do NOT rely on cwd -- CubeMX may set it to its own install directory.
+    root = Path(__file__).resolve().parent.parent
+    os.chdir(root)
     print(f"post_codegen: project root = {root}")
 
-    # ── Step 1: CRLF → LF for all git-tracked files ─────────────────────────
+    # ── Step 1: CRLF -> LF for all git-tracked files ─────────────────────────
     tracked = git_tracked_files(root)
     if not tracked:
         print("[WARN] No git-tracked files found – skipping CRLF conversion.")
     else:
-        print(f"\n[1/2] CRLF → LF: scanning {len(tracked)} git-tracked file(s)...")
+        print(f"\n[1/2] CRLF->LF: scanning {len(tracked)} git-tracked file(s)...")
         crlf_count = 0
         for f in sorted(tracked):
             if convert_crlf_to_lf(f):
                 crlf_count += 1
-                print(f"  [CRLF→LF] {f.relative_to(root)}")
+                print(f"  [CRLF->LF] {f.relative_to(root)}")
         if crlf_count == 0:
             print("  (no files needed conversion)")
         else:

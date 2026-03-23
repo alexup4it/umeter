@@ -1,10 +1,10 @@
 #!/bin/sh
 
-# Usage: binname.sh <binary_name> [project_root]
-# If project_root is not provided, falls back to ../
+# Resolve project root relative to this script's location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT_ROOT="${2:-.}"
-PARAMS_FILE="${PROJECT_ROOT}/Core/Inc/params.h"
+PARAMS_FILE="$PROJECT_ROOT/Core/Inc/params.h"
 
 DEVICE_NAME=$(grep PARAMS_DEVICE_NAME "$PARAMS_FILE" | awk '{print $3}')
 DEVICE_VER1=$(grep PARAMS_FW_B1 "$PARAMS_FILE" | head -n1 | awk '{print $3}')
