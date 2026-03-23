@@ -31,9 +31,6 @@
 #include "ptasks.h"
 #include "rtc.h"
 
-extern void pm_flash_enter_stop(void);
-extern void pm_flash_exit_stop(void);
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -244,9 +241,6 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime) {
     /* Suspend HAL tick (TIM1) */
     HAL_SuspendTick();
 
-    /* Put peripherals into low-leak configuration */
-    pm_flash_enter_stop();
-
     /* Calculate wakeup timer value and arm it with interrupt */
     {
         uint32_t sleep_ms =
@@ -271,9 +265,6 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime) {
 
     /* Restore system clock (HSE + PLL) — required after Stop mode */
     SystemClock_Config();
-
-    /* Restore peripheral & GPIO configuration */
-    pm_flash_exit_stop();
 
     /* Resume HAL tick */
     HAL_ResumeTick();

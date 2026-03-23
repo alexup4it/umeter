@@ -1,10 +1,5 @@
 /*
  * OTA task
- *
- * Over-the-air firmware update (merged from ota lib)
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #include <ctype.h>
@@ -18,10 +13,14 @@
 #include "fws.h"
 #include "hmac.h"
 #include "jsmn.h"
+#include "logger.h"
 #include "params.h"
 #include "ptasks.h"
 #include "sim800l.h"
+#include "w25q.h"
 #include "w25q_s.h"
+
+#define TAG "OTA"
 
 static struct w25q_s* s_mem;
 
@@ -29,7 +28,7 @@ static struct w25q_s* s_mem;
 
 #define JSON_MAX_TOKENS 32
 
-#define FILE_PART_SIZE   512
+#define FILE_PART_SIZE   2048
 #define FLASH_WRITE_SIZE 128
 #define FLASH_READ_SIZE  32
 
@@ -176,7 +175,7 @@ static void ota_response_free(struct sim800l_http_response* response) {
     }
 }
 
-static void flash_erase(uint32_t addr, uint16_t size) {
+static void flash_erase(uint32_t addr, uint32_t size) {
     while (size) {
         w25q_s_sector_erase(s_mem, addr);
 
@@ -238,8 +237,7 @@ static uint32_t flash_checksum(uint32_t addr, uint32_t size) {
 }
 
 /******************************************************************************/
-void task_ota(void* argument) {
-    struct task_ota_ctx* ctx = argument;
+static void ota_check_update(struct logger* logger) {
     struct sim800l_http_response response;
     char filename[64];
     struct fws fws;
@@ -250,103 +248,121 @@ void task_ota(void* argument) {
     char url[PARAMS_OTA_URL_SIZE + 64];
     char hmac_buf[HMAC_BASE64_LEN];
 
-    s_mem = ctx->mem;
+    /* Request firmware list */
+    LOG_I(logger, TAG, "checking for update");
+    strcpy(url, params.url_ota);
+    strcat(url, "/api/ota/list?name=");
+    strcat(url, PARAMS_DEVICE_NAME);
 
-    if (w25q_s_get_manufacturer_id(s_mem) != FWS_WINBOND_MANUFACTURER_ID) {
-        vTaskDelete(NULL);
+    memset(&response, 0, sizeof(response));
+    ret = ota_http_get(url, hmac_buf, &response);
+    if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
+        LOG_W(logger, TAG, "list request failed");
+        ota_response_free(&response);
+        return;
     }
 
-    goto startup;
+    /* Parse firmware list */
+    ret = parse_json(response.body, &fws, filename, sizeof(filename));
+    ota_response_free(&response);
 
-    for (;;) {
-        osDelay(pdMS_TO_TICKS(OTA_CHECK_INTERVAL_MS));
+    /* No update or error */
+    if (ret <= PARAMS_FW_VERSION) {
+        LOG_I(logger, TAG, "no update available");
+        return;
+    }
 
-    startup:
-        /* Request firmware list */
+    /* Too big firmware */
+    if (fws.size > APP_LENGTH) {
+        LOG_E(logger, TAG, "firmware too big");
+        return;
+    }
+
+    /* Erase SPI FLASH */
+    LOG_I(logger, TAG, "erasing flash");
+    flash_erase(FWS_PAYLOAD_ADDR, fws.size);
+
+    /* Download firmware in chunks */
+    LOG_I(logger, TAG, "downloading firmware");
+    addr    = 0;
+    retries = RETRIES;
+    while (retries && addr < fws.size) {
+        /* Build file request URL */
         strcpy(url, params.url_ota);
-        strcat(url, "/api/list?name=");
-        strcat(url, PARAMS_DEVICE_NAME);
+        strcat(url, "/api/ota/file?file=");
+        strcat(url, filename);
+        strcat(url, "&addr=");
+        utoa(addr, &url[strlen(url)], 10);
+        strcat(url, "&size=");
+        utoa(FILE_PART_SIZE, &url[strlen(url)], 10);
 
         memset(&response, 0, sizeof(response));
         ret = ota_http_get(url, hmac_buf, &response);
         if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
+            LOG_W(logger, TAG, "chunk download failed");
             ota_response_free(&response);
+            retries--;
             continue;
         }
 
-        /* Parse firmware list */
-        ret = parse_json(response.body, &fws, filename, sizeof(filename));
-        ota_response_free(&response);
+        /* Write data to SPI FLASH */
+        flash_write(FWS_PAYLOAD_ADDR + addr,
+                    (uint8_t*)response.body,
+                    response.body_length);
 
-        /* No update or error */
-        if (ret <= PARAMS_FW_VERSION) {
-            continue;
-        }
-
-        /* Too big firmware */
-        if (fws.size > APP_LENGTH) {
-            continue;
-        }
-
-        /* Erase SPI FLASH */
-        flash_erase(FWS_PAYLOAD_ADDR, fws.size);
-
-        /* Download firmware in chunks */
-        addr    = 0;
+        addr += response.body_length;
         retries = RETRIES;
-        while (retries && addr < fws.size) {
-            /* Build file request URL */
-            strcpy(url, params.url_ota);
-            strcat(url, "/api/file?file=");
-            strcat(url, filename);
-            strcat(url, "&addr=");
-            utoa(addr, &url[strlen(url)], 10);
-            strcat(url, "&size=");
-            utoa(FILE_PART_SIZE, &url[strlen(url)], 10);
 
-            memset(&response, 0, sizeof(response));
-            ret = ota_http_get(url, hmac_buf, &response);
-            if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
-                ota_response_free(&response);
-                retries--;
-                continue;
-            }
+        ota_response_free(&response);
+    }
 
-            /* Write data to SPI FLASH */
-            flash_write(FWS_PAYLOAD_ADDR + addr,
-                        (uint8_t*)response.body,
-                        response.body_length);
+    /* Expand to a multiple of 4 */
+    if (fws.size % sizeof(uint32_t)) {
+        int expand   = sizeof(uint32_t) - fws.size % sizeof(uint32_t);
+        uint8_t byte = 0xFF;
 
-            addr += response.body_length;
-            retries = RETRIES;
-
-            ota_response_free(&response);
+        fws.size += expand;
+        while (expand) {
+            flash_write(FWS_PAYLOAD_ADDR + addr, &byte, 1);
+            expand--;
+            addr++;
         }
+    }
 
-        /* Expand to a multiple of 4 */
-        if (fws.size % sizeof(uint32_t)) {
-            int expand   = sizeof(uint32_t) - fws.size % sizeof(uint32_t);
-            uint8_t byte = 0xFF;
+    /* Checksum */
+    if (flash_checksum(FWS_PAYLOAD_ADDR, fws.size) != fws.checksum) {
+        LOG_E(logger, TAG, "checksum mismatch");
+        return;
+    }
 
-            fws.size += expand;
-            while (expand) {
-                flash_write(FWS_PAYLOAD_ADDR + addr, &byte, 1);
-                expand--;
-                addr++;
-            }
-        }
+    /* Update SPI FLASH header */
+    LOG_I(logger, TAG, "update verified, rebooting");
+    fws.loaded = 0;
+    flash_write_header(&fws);
 
-        /* Checksum */
-        if (flash_checksum(FWS_PAYLOAD_ADDR, fws.size) != fws.checksum) {
-            continue;
-        }
+    /* Reset */
+    osDelay(pdMS_TO_TICKS(100));
+    NVIC_SystemReset();
+}
 
-        /* Update SPI FLASH header */
-        fws.loaded = 0;
-        flash_write_header(&fws);
+/******************************************************************************/
+void task_ota(void* argument) {
+    struct task_ota_ctx* ctx = argument;
 
-        /* Reset */
-        osDelay(pdMS_TO_TICKS(100));
-        NVIC_SystemReset();
+    s_mem = ctx->mem;
+
+    w25q_power_on(&s_mem->mem);
+    if (w25q_s_get_manufacturer_id(s_mem) != FWS_WINBOND_MANUFACTURER_ID) {
+        LOG_E(ctx->logger, TAG, "flash not found");
+        w25q_power_down(&s_mem->mem);
+        vTaskDelete(NULL);
+    }
+    w25q_power_down(&s_mem->mem);
+
+    for (;;) {
+        w25q_power_on(&s_mem->mem);
+        ota_check_update(ctx->logger);
+        w25q_power_down(&s_mem->mem);
+        osDelay(pdMS_TO_TICKS(OTA_CHECK_INTERVAL_MS));
     }
 }

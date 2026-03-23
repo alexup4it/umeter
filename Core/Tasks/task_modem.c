@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "actual.h"
+#include "avoltage.h"
 #include "logger.h"
 #include "main.h"
 #include "ptasks.h"
@@ -27,6 +28,7 @@
 struct modem_ctx {
     struct actual* actual;
     struct sim800l* modem;
+    struct avoltage* voltage;
     struct logger* logger;
     void (*power_on)(void);
     void (*power_off)(void);
@@ -72,10 +74,8 @@ static int modem_ensure_ready(struct modem_ctx* ctx) {
         return 0;
     }
 
-    /* Check battery voltage */
-    xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
-    int voltage = ctx->actual->voltage;
-    xSemaphoreGive(ctx->actual->mutex);
+    /* Check battery voltage (live ADC reading) */
+    int voltage = avoltage(ctx->voltage);
 
     if (voltage < VOLTAGE_MIN_MV) {
         LOG_W(ctx->logger, TAG, "voltage too low");
@@ -216,6 +216,7 @@ void task_modem(void* argument) {
     struct modem_ctx ctx = {
         .actual    = task_ctx->actual,
         .modem     = task_ctx->modem,
+        .voltage   = task_ctx->voltage,
         .logger    = task_ctx->logger,
         .power_on  = task_ctx->power_on,
         .power_off = task_ctx->power_off,

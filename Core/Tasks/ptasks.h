@@ -113,13 +113,12 @@ struct task_sensors_ctx {
     pm_fn as5600_off;
     pm_fn aht20_on;
     pm_fn aht20_off;
-    pm_fn avoltage_on;
-    pm_fn avoltage_off;
 };
 
 struct task_modem_ctx {
     struct actual* actual;
     struct sim800l* modem;
+    struct avoltage* voltage;
     struct logger* logger;
     pm_fn power_on;
     pm_fn power_off;

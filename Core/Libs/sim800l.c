@@ -205,12 +205,12 @@ static bool wait_for_ok(struct sim800l* self, const uint32_t timeout_ms) {
             break;
         }
 
-        if (strstr((char*)self->rx_buffer, "OK")) {
+        if (strstr(self->rx_current, "OK")) {
             found_ok = true;
             break;
         }
 
-        if (strstr((char*)self->rx_buffer, "ERROR")) {
+        if (strstr(self->rx_current, "ERROR")) {
             break;
         }
 
@@ -394,10 +394,16 @@ static char* parse_http_head_authorization(struct sim800l* self,
  * Returns allocated body and sets *out_length, or NULL on failure.
  *
  * +HTTPREAD: <data_len>\r\n<data>\r\nOK\r\n
+ *
+ * Streams body data directly into the allocated buffer to support responses
+ * larger than SIM800L_BUFFER_SIZE.
  */
 static char* parse_http_read(struct sim800l* self,
                              size_t* out_length,
                              uint32_t timeout_ms) {
+    const TickType_t started_at    = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+
     read_to(self, timeout_ms, "+HTTPREAD: ");
     char* p = read_to(self, timeout_ms, "\r\n");
 
@@ -406,9 +412,7 @@ static char* parse_http_read(struct sim800l* self,
     }
 
     size_t length = (size_t)strtoul(p, NULL, 10);
-
-    p = read_n(self, timeout_ms, length);
-    if (!p) {
+    if (length == 0) {
         return NULL;
     }
 
@@ -417,9 +421,47 @@ static char* parse_http_read(struct sim800l* self,
         return NULL;
     }
 
-    memcpy(body, p, length);
+    size_t copied = 0;
+
+    /* Copy any body bytes already sitting in rx_buffer */
+    size_t buffered = self->rx_buffer + self->rx_length - self->rx_current;
+    if (buffered > 0) {
+        if (buffered > length) {
+            buffered = length;
+        }
+        memcpy(body, self->rx_current, buffered);
+        self->rx_current += buffered;
+        copied = buffered;
+    }
+
+    /* Stream remaining bytes directly from the stream buffer */
+    while (copied < length) {
+        TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            vPortFree(body);
+            return NULL;
+        }
+
+        size_t received = xStreamBufferReceive(self->stream,
+                                               (uint8_t*)body + copied,
+                                               length - copied,
+                                               timeout_ticks - elapsed);
+        if (received == 0) {
+            vPortFree(body);
+            return NULL;
+        }
+        copied += received;
+    }
+
     body[length] = '\0';
     *out_length  = length;
+
+    /* Consume trailing \r\nOK\r\n so it doesn't leak into the next command.
+     * Some of it may already be in rx_buffer (small responses arrive in one
+     * burst), so shift remaining data instead of resetting. */
+    shuft_rx_to_current(self);
+    wait_for_ok(self, timeout_ms);
+
     return body;
 }
 
@@ -514,6 +556,34 @@ static int http_setup_bin(struct sim800l* self,
     return 0;
 }
 
+/**
+ * Drain leftover modem data from the stream buffer and reset rx state.
+ * Used after a failed HTTPREAD to prevent HTTPTERM from being sent while the
+ * modem is still dumping binary data, which would corrupt the session.
+ */
+static void drain_and_reset(struct sim800l* self) {
+    uint8_t drain[128];
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(2000);
+
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(now - deadline) >= 0) {
+            break;
+        }
+        size_t n = xStreamBufferReceive(self->stream,
+                                        drain,
+                                        sizeof(drain),
+                                        pdMS_TO_TICKS(200));
+        if (n == 0) {
+            break; /* stream idle for 200 ms — safe to proceed */
+        }
+    }
+
+    self->rx_length    = 0;
+    self->rx_current   = self->rx_buffer;
+    self->rx_buffer[0] = '\0';
+}
+
 static int http_execute(struct sim800l* self,
                         const char* url,
                         const char* auth_header,
@@ -550,12 +620,20 @@ static int http_execute(struct sim800l* self,
 
         /* Read response body */
         transmit(self, "AT+HTTPREAD");
-        response->body = parse_http_read(self, &response->body_length, 1000);
+        response->body = parse_http_read(self, &response->body_length, 10000);
         if (!response->body) {
             break;
         }
         result = 200;
     } while (0);
+
+    /* Drain any leftover modem data before terminating the HTTP session.
+     * If HTTPREAD failed mid-transfer, the modem may still be dumping binary
+     * data.  Sending HTTPTERM while that data is in flight corrupts the
+     * modem state, so we wait for the stream to go idle first. */
+    if (result != 200) {
+        drain_and_reset(self);
+    }
 
     /* Terminate HTTP session */
     send_command(self, "AT+HTTPTERM", 2000);
@@ -612,12 +690,17 @@ int sim800l_http_post_bin(struct sim800l* self,
 
         /* Read response body */
         transmit(self, "AT+HTTPREAD");
-        response->body = parse_http_read(self, &response->body_length, 1000);
+        response->body = parse_http_read(self, &response->body_length, 10000);
         if (!response->body) {
             break;
         }
         result = 200;
     } while (0);
+
+    /* Drain any leftover modem data before terminating the HTTP session. */
+    if (result != 200) {
+        drain_and_reset(self);
+    }
 
     /* Terminate HTTP session */
     send_command(self, "AT+HTTPTERM", 2000);

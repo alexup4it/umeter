@@ -101,9 +101,7 @@ void task_sensors(void* argument) {
         drdy = 0;
 
         if (avail & AVAIL_VOL) {
-            ctx->avoltage_on();
             voltage = avoltage(ctx->voltage);
-            ctx->avoltage_off();
             if (voltage >= 0) {
                 drdy |= DRDY_VOL;
             }

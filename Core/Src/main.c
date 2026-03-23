@@ -207,18 +207,6 @@ static void pm_flash_spi_deinit(void) {
     HAL_SPI_DeInit(&hspi2);
 }
 
-void pm_flash_enter_stop(void) {
-    w25q_power_down(&mem.mem);
-    __HAL_RCC_DMA1_CLK_DISABLE();
-    __HAL_RCC_GPIOH_CLK_DISABLE();
-}
-
-void pm_flash_exit_stop(void) {
-    __HAL_RCC_DMA1_CLK_ENABLE();
-    __HAL_RCC_GPIOH_CLK_ENABLE();
-    w25q_power_on(&mem.mem);
-}
-
 /*---------------------------------------------------------------------------*/
 /* Task context instances                                                    */
 /*---------------------------------------------------------------------------*/
@@ -253,17 +241,16 @@ struct task_sensors_ctx task_sensors_ctx = {
 #ifdef LOGGER
     .logger = &logger,
 #endif
-    .as5600_on    = pm_as5600_on,
-    .as5600_off   = pm_as5600_off,
-    .aht20_on     = pm_aht20_on,
-    .aht20_off    = pm_aht20_off,
-    .avoltage_on  = pm_avoltage_on,
-    .avoltage_off = pm_avoltage_off,
+    .as5600_on  = pm_as5600_on,
+    .as5600_off = pm_as5600_off,
+    .aht20_on   = pm_aht20_on,
+    .aht20_off  = pm_aht20_off,
 };
 
 struct task_modem_ctx task_modem_ctx = {
     .actual    = &actual,
     .modem     = &modem,
+    .voltage   = &avlt,
     .power_on  = pm_modem_on,
     .power_off = pm_modem_off,
 #ifdef LOGGER
@@ -454,7 +441,7 @@ int main(void) {
     as5600_init(&pot, &hi2c1);
     aht20_init(&aht, &hi2c2);
     freqmeter_init(&cnt);
-    avoltage_init(&avlt, &hadc1, 2);
+    avoltage_init(&avlt, &hadc1, 2, pm_avoltage_on, pm_avoltage_off);
 
     sensorq_init(&sensorq, sensorq_buf, SENSORS_QUEUE_CAPACITY);
 
