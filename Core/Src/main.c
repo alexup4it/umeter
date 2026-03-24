@@ -41,6 +41,7 @@
 #include "freqmeter.h"
 #include "fws.h"
 #include "i2c.h"
+#include "icp201xx.h"
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
@@ -93,6 +94,7 @@ extern const uint32_t* _app;
 static struct actual actual;
 static struct as5600 pot;
 static struct aht20 aht;
+static struct icp201xx prs;
 static struct freqmeter cnt;
 static struct avoltage avlt;
 static struct button btn;
@@ -139,13 +141,13 @@ static void pm_modem_off(void) {
     HAL_GPIO_WritePin(MDM_EN_PRE_GPIO_Port, MDM_EN_PRE_Pin, GPIO_PIN_RESET);
 }
 
-static void pm_as5600_on(void) {
+static void pm_sens_on(void) {
     HAL_GPIO_WritePin(SENS_EN_GPIO_Port, SENS_EN_Pin, GPIO_PIN_SET);
     osDelay(pdMS_TO_TICKS(20));
     MX_I2C1_Init();
 }
 
-static void pm_as5600_off(void) {
+static void pm_sens_off(void) {
     HAL_I2C_DeInit(&hi2c1);
     HAL_GPIO_WritePin(SENS_EN_GPIO_Port, SENS_EN_Pin, GPIO_PIN_RESET);
 }
@@ -232,19 +234,20 @@ struct task_anemometer_ctx task_anemometer_ctx = {
 };
 
 struct task_sensors_ctx task_sensors_ctx = {
-    .actual  = &actual,
-    .queue   = &sensorq,
-    .as5600  = &pot,
-    .aht20   = &aht,
-    .voltage = &avlt,
-    .cnt     = &cnt,
+    .actual   = &actual,
+    .queue    = &sensorq,
+    .as5600   = &pot,
+    .aht20    = &aht,
+    .icp201xx = &prs,
+    .voltage  = &avlt,
+    .cnt      = &cnt,
 #ifdef LOGGER
     .logger = &logger,
 #endif
-    .as5600_on  = pm_as5600_on,
-    .as5600_off = pm_as5600_off,
-    .aht20_on   = pm_aht20_on,
-    .aht20_off  = pm_aht20_off,
+    .sens_on      = pm_sens_on,
+    .sens_off     = pm_sens_off,
+    .aht20_on     = pm_aht20_on,
+    .aht20_off    = pm_aht20_off,
 };
 
 struct task_modem_ctx task_modem_ctx = {
@@ -439,6 +442,7 @@ int main(void) {
     sim800l_init(&modem, &huart2, params.apn, &logger);
     modem_init();
     as5600_init(&pot, &hi2c1);
+    icp201xx_init(&prs, &hi2c1);
     aht20_init(&aht, &hi2c2);
     freqmeter_init(&cnt);
     avoltage_init(&avlt, &hadc1, 2, pm_avoltage_on, pm_avoltage_off);

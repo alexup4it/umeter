@@ -11,13 +11,12 @@
 struct actual {
     SemaphoreHandle_t mutex;
 
-    int avail;
-
     int voltage;
-    uint32_t wind_speed;
-    int32_t wind_direction;
     int32_t humidity;
     int32_t temperature;
+    int32_t pressure;
+    uint32_t wind_speed;
+    int32_t wind_direction;
 };
 
 void actual_init(struct actual* self);

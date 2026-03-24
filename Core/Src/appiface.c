@@ -142,10 +142,6 @@ static int parse(struct appiface* self,
                          resp_size,
                          "period_anemometer",
                          self->uparams.period_anemometer);
-        } else if (jsoneq(request, tparam, "sens") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "sens", self->actual->avail);
-            xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "bat") == 0) {
             xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
             strjson_uint(response, resp_size, "bat", self->actual->voltage);
@@ -164,6 +160,13 @@ static int parse(struct appiface* self,
         } else if (jsoneq(request, tparam, "hum") == 0) {
             xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
             strjson_int(response, resp_size, "hum", self->actual->humidity);
+            xSemaphoreGive(self->actual->mutex);
+        } else if (jsoneq(request, tparam, "pressure") == 0) {
+            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+            strjson_int(response,
+                        resp_size,
+                        "pressure",
+                        self->actual->pressure);
             xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "wind_direction") == 0) {
             xSemaphoreTake(self->actual->mutex, portMAX_DELAY);

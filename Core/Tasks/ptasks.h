@@ -37,14 +37,15 @@ struct __attribute__((packed)) sensor_record {
     uint16_t voltage;        /* millivolts              */
     int16_t temperature;     /* centidegrees C (0.01°C) */
     uint16_t humidity;       /* centipercent RH (0.01%) */
+    uint16_t pressure;       /* hectopascals (hPa * 10) */
     uint16_t wind_direction; /* centidegrees (0.01°)    */
     uint16_t wind_speed_avg;
     uint16_t wind_speed_min;
     uint16_t wind_speed_max;
 };
 
-_Static_assert(sizeof(struct sensor_record) == 18,
-               "sensor_record must be 18 bytes (binary wire format)");
+_Static_assert(sizeof(struct sensor_record) == 20,
+               "sensor_record must be 20 bytes (binary wire format)");
 
 /* --- Utility functions (callable from any context) --- */
 
@@ -65,6 +66,7 @@ void task_button_irq_notify_from_isr(void);
 /* Forward declarations */
 struct as5600;
 struct aht20;
+struct icp201xx;
 struct avoltage;
 struct freqmeter;
 struct button;
@@ -106,11 +108,12 @@ struct task_sensors_ctx {
     struct sensorq* queue;
     struct as5600* as5600;
     struct aht20* aht20;
+    struct icp201xx* icp201xx;
     struct avoltage* voltage;
     struct freqmeter* cnt;
     struct logger* logger;
-    pm_fn as5600_on;
-    pm_fn as5600_off;
+    pm_fn sens_on;
+    pm_fn sens_off;
     pm_fn aht20_on;
     pm_fn aht20_off;
 };

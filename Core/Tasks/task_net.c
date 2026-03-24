@@ -25,7 +25,7 @@
 #define TAG "NET"
 
 #define JSON_MAX_TOKENS       8
-#define MAX_RECORDS_PER_BATCH 56
+#define MAX_RECORDS_PER_BATCH 50
 #define SEND_RETRIES          3
 #define REQUEST_BODY_SIZE     1024
 
@@ -114,7 +114,7 @@ static void response_free(struct sim800l_http_response* response) {
 /******************************************************************************/
 
 #define DATA_HEADER_SIZE 14
-#define DATA_RECORD_SIZE 18
+#define DATA_RECORD_SIZE 20
 
 static int sensor_read(struct sensorq* queue,
                        struct sensor_record* records,
@@ -133,15 +133,16 @@ static int sensor_read(struct sensorq* queue,
  *   12     uint8   tamper (0/1)
  *   13     uint8   records count
  *
- * Records (N × 18 bytes each, little-endian):
+ * Records (N × 20 bytes each, little-endian):
  *   0..3   uint32  timestamp
  *   4..5   uint16  voltage (mV)
  *   6..7   int16   temperature (centidegrees C)
  *   8..9   uint16  humidity (centipercent RH)
- *   10..11 uint16  wind_direction (centidegrees)
- *   12..13 uint16  wind_speed_avg
- *   14..15 uint16  wind_speed_min
- *   16..17 uint16  wind_speed_max
+ *   10..11 uint16  pressure (hPa * 10)
+ *   12..13 uint16  wind_direction (centidegrees)
+ *   14..15 uint16  wind_speed_avg
+ *   16..17 uint16  wind_speed_min
+ *   18..19 uint16  wind_speed_max
  *
  * Returns total payload size in bytes.
  * Writes number of records read into *record_count_out.
@@ -294,9 +295,7 @@ static void wait_for_net_event(void) {
 /* Build JSON payloads                                                        */
 /******************************************************************************/
 
-static void build_info_payload(char* request,
-                               size_t size,
-                               int available_sensors) {
+static void build_info_payload(char* request, size_t size) {
     strjson_init(request, size);
     strjson_uint(request, size, "uid", params.id);
     strjson_uint(request, size, "ts", timestamp);
@@ -312,7 +311,6 @@ static void build_info_payload(char* request,
     strjson_uint(request, size, "period_upload", params.period_upload);
     strjson_uint(request, size, "period_sensors", params.period_sensors);
     strjson_uint(request, size, "period_anemometer", params.period_anemometer);
-    strjson_int(request, size, "sens", available_sensors);
 }
 
 static void build_cnet_payload(char* request,
@@ -390,10 +388,9 @@ void task_net(void* argument) {
 
     /* 2. Send station info → /api/info */
     xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
-    int available_sensors = task_ctx->actual->avail;
     xSemaphoreGive(task_ctx->actual->mutex);
 
-    build_info_payload(request_body, sizeof(request_body), available_sensors);
+    build_info_payload(request_body, sizeof(request_body));
     request_post(&ctx, "/api/info");
 
     LOG_I(ctx.logger, TAG, "info sent");

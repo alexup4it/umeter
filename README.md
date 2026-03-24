@@ -38,7 +38,6 @@ Request JSON:
 |period_upload|uint32|Communication with application server period (seconds)|
 |period_sensors|uint32|Sensors data update period (seconds)|
 |period_anemometer|uint32|Measurement time for anemometer (seconds)|
-|sens|int32|[Available sensors](#available-sensors) bit mask|
 
 Response JSON:
 |Field|Type|Description|
@@ -82,19 +81,20 @@ Request body is raw binary (little-endian throughout):
 |12|1|uint8|Tamper input (0 or 1)|
 |13|1|uint8|Number of sensor records (N)|
 
-**Sensor record (18 bytes each, N records)**
+**Sensor record (20 bytes each, N records)**
 |Offset|Size|Type|Description|
 |-|-|-|-|
 |0|4|uint32|Measurement datetime (Unix timestamp)|
 |4|2|uint16|Battery voltage (mV)|
 |6|2|int16|Temperature (0.01 °C)|
 |8|2|uint16|Humidity (0.01 %RH)|
-|10|2|uint16|Wind direction (0.01°)|
-|12|2|uint16|Wind speed average (per `period_anemometer` seconds)|
-|14|2|uint16|Wind speed minimum (per `period_anemometer` seconds)|
-|16|2|uint16|Wind speed maximum (per `period_anemometer` seconds)|
+|10|2|uint16|Pressure (0.1 hPa)|
+|12|2|uint16|Wind direction (0.01°)|
+|14|2|uint16|Wind speed average (per `period_anemometer` seconds)|
+|16|2|uint16|Wind speed minimum (per `period_anemometer` seconds)|
+|18|2|uint16|Wind speed maximum (per `period_anemometer` seconds)|
 
-Total payload size: 14 + N × 18 bytes (max N = 56, max payload = 1022 bytes)
+Total payload size: 14 + N × 20 bytes (max N = 50, max payload = 1014 bytes)
 
 Response JSON:
 |Field|Type|Description|
@@ -111,16 +111,6 @@ Response JSON:
 |4|Error: invalid checksum (external storage)|
 |5|Error: invalid checksum (internal memory)|
 |6|Error: could not erase internal memory|
-
-### Available sensors
-|Bit| Sensor                  |
-|-|-------------------------|
-|0x01 (xxxx xxx1)| Voltage                 |
-|0x02 (xxxx xx1x)| Anemometer _(not used)_ |
-|0x04 (xxxx x1xx)| TMPx75 _(not used)_     |
-|0x08 (xxxx 1xxx)| AHT20                   |
-|0x10 (xxx1 xxxx)| Distance _(not used)_   |
-|0x20 (xx1x xxxx)| AS5600                  |
 
 ## OTA API
 **_?_**
