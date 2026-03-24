@@ -37,7 +37,7 @@ void task_anemometer(void* argument) {
                             pdFALSE,
                             portMAX_DELAY);
 
-        led_blink(2);
+        led_blink(1);
 
         /* Power on and stabilize */
         ctx->anemometer_on();

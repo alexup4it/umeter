@@ -431,7 +431,7 @@ void task_net(void* argument) {
             build_data_binary(ctx.body, ctx.body_size, queue, &record_count);
 
         /* Try to send with retries */
-        led_blink(4);
+        led_blink(3);
         bool sent = false;
         for (int attempt = 0; attempt < SEND_RETRIES; attempt++) {
             if (request_post_bin(&ctx, "/api/data", body_len) == 0) {

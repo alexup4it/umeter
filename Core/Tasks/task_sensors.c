@@ -96,7 +96,7 @@ void task_sensors(void* argument) {
                             pdFALSE,
                             portMAX_DELAY);
 
-        led_blink(3);
+        led_blink(2);
 
         drdy = 0;
 
