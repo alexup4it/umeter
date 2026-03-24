@@ -24,6 +24,7 @@ extern EventGroupHandle_t task_events;
 /* Task → scheduler completion bits */
 #define TASK_EVENT_ANEMOMETER_DONE (1 << 4)
 #define TASK_EVENT_SENSORS_DONE    (1 << 5)
+#define TASK_EVENT_TIME_SYNCED     (1 << 6)
 
 /**
  * Create event group. Call before scheduler starts.

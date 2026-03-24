@@ -63,6 +63,15 @@ void task_manager_run(struct task_default_ctx* ctx) {
     uint32_t sensors_slow_every =
         sensors_slow_period ? sensors_slow_period / period_base : sensors_every;
 
+    /* Kick off the network task so it can sync time before we start
+     * scheduling sensor measurements (timestamps depend on valid time). */
+    xEventGroupSetBits(task_events, TASK_EVENT_NET_START);
+    xEventGroupWaitBits(task_events,
+                        TASK_EVENT_TIME_SYNCED,
+                        pdTRUE,
+                        pdFALSE,
+                        portMAX_DELAY);
+
     for (;;) {
         xEventGroupSetBits(task_events, TASK_EVENT_WATCHDOG_START);
 

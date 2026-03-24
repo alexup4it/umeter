@@ -386,6 +386,9 @@ void task_net(void* argument) {
 
     LOG_I(ctx.logger, TAG, "time synced");
 
+    /* Unblock task_manager — time is available for sensor timestamps */
+    xEventGroupSetBits(task_events, TASK_EVENT_TIME_SYNCED);
+
     /* 2. Send station info → /api/info */
     xSemaphoreTake(task_ctx->actual->mutex, portMAX_DELAY);
     xSemaphoreGive(task_ctx->actual->mutex);
