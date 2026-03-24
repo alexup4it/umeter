@@ -56,10 +56,6 @@ static void modem_power_on(struct modem_ctx* ctx) {
 }
 
 static void modem_power_off(struct modem_ctx* ctx) {
-    if (!ctx->ready) {
-        return;
-    }
-
     if (ctx->gprs_open) {
         sim800l_gprs_close(ctx->modem);
         ctx->gprs_open = false;
