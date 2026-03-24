@@ -64,8 +64,6 @@ void task_manager_run(struct task_default_ctx* ctx) {
         sensors_slow_period ? sensors_slow_period / period_base : sensors_every;
 
     for (;;) {
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(period_base * 1000U));
-
         xEventGroupSetBits(task_events, TASK_EVENT_WATCHDOG_START);
 
         rtctime_read();
@@ -105,6 +103,7 @@ void task_manager_run(struct task_default_ctx* ctx) {
             xEventGroupSetBits(task_events, TASK_EVENT_NET_START);
         }
 
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(period_base * 1000U));
         tick++;
     }
 }
