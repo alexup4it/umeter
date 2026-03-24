@@ -20,9 +20,9 @@
 #define PARAMS_DEVICE_NAME "umeter-b1"
 
 #define PARAMS_FW_B1 0
-#define PARAMS_FW_B2 0
-#define PARAMS_FW_B3 5
-#define PARAMS_FW_B4 2
+#define PARAMS_FW_B2 1
+#define PARAMS_FW_B3 0
+#define PARAMS_FW_B4 0
 
 #define PARAMS_FW_VERSION                                              \
     (((uint32_t)PARAMS_FW_B1 << 24) | ((uint32_t)PARAMS_FW_B2 << 16) | \
