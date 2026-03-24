@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "actual.h"
+#include "freqmeter.h"
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
@@ -106,6 +108,26 @@ void task_manager_run(struct task_default_ctx* ctx) {
                                 pdTRUE,
                                 pdFALSE,
                                 pdMS_TO_TICKS(period_sensors * 1000U));
+
+            /* Build a sensor record from actual values + wind accumulator */
+            struct freqmeter_accum ca;
+            freqmeter_accum_read(ctx->cnt, &ca);
+
+            xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
+            struct sensor_record rec = {
+                .timestamp      = timestamp,
+                .voltage        = (uint16_t)ctx->actual->voltage,
+                .temperature    = (int16_t)(ctx->actual->temperature / 10),
+                .humidity       = (uint16_t)(ctx->actual->humidity / 10),
+                .pressure       = (uint16_t)(ctx->actual->pressure / 1000),
+                .wind_direction = (uint16_t)(ctx->actual->wind_direction / 10),
+                .wind_speed_avg = (uint16_t)ca.avg,
+                .wind_speed_min = (uint16_t)ca.min,
+                .wind_speed_max = (uint16_t)ca.max,
+            };
+            xSemaphoreGive(ctx->actual->mutex);
+
+            sensorq_push(ctx->sensorq, &rec);
         }
 
         if (do_upload) {

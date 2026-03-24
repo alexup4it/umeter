@@ -80,8 +80,10 @@ struct actual;
 typedef void (*pm_fn)(void);
 
 struct task_default_ctx {
+    struct actual* actual;
     struct logger* logger;
     struct sensorq* sensorq;
+    struct freqmeter* cnt;
 };
 
 struct task_blink_ctx {
@@ -106,12 +108,10 @@ struct task_anemometer_ctx {
 
 struct task_sensors_ctx {
     struct actual* actual;
-    struct sensorq* queue;
     struct as5600* as5600;
     struct aht20* aht20;
     struct icp201xx* icp201xx;
     struct avoltage* voltage;
-    struct freqmeter* cnt;
     struct logger* logger;
     pm_fn sens_on;
     pm_fn sens_off;

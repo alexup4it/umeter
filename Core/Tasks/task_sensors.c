@@ -9,13 +9,11 @@
 #include "aht20.h"
 #include "as5600.h"
 #include "avoltage.h"
-#include "freqmeter.h"
 #include "icp201xx.h"
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
 #include "rtctime.h"
-#include "sensorq.h"
 
 #define TAG "SENSORS"
 
@@ -24,7 +22,7 @@
 
 enum {
     AVAIL_VOL      = 0x01,
-    AVAIL_HALL      = 0x02,
+    AVAIL_HALL     = 0x02,
     AVAIL_AHT20    = 0x08,
     AVAIL_ICP201XX = 0x40,
     AVAIL_AS5600   = 0x20,
@@ -121,31 +119,12 @@ void task_sensors(void* argument) {
         }
 
         xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
-        ctx->actual->voltage = voltage;
-        ctx->actual->temperature = temperature;
-        ctx->actual->humidity = humidity;
+        ctx->actual->voltage        = voltage;
+        ctx->actual->temperature    = temperature;
+        ctx->actual->humidity       = humidity;
         ctx->actual->wind_direction = wind_direction;
-        ctx->actual->pressure = pressure;
+        ctx->actual->pressure       = pressure;
         xSemaphoreGive(ctx->actual->mutex);
-
-        {
-            struct freqmeter_accum ca;
-            freqmeter_accum_read(ctx->cnt, &ca);
-
-            struct sensor_record rec = {
-                .timestamp = timestamp,
-                .voltage = (uint16_t)voltage,
-                .temperature = (int16_t)(temperature / 10),
-                .humidity = (uint16_t)(humidity / 10),
-                .pressure = (uint16_t)(pressure / 1000),
-                .wind_direction = (uint16_t)(wind_direction / 10),
-                .wind_speed_avg = (uint16_t)ca.avg,
-                .wind_speed_min = (uint16_t)ca.min,
-                .wind_speed_max = (uint16_t)ca.max,
-            };
-
-            sensorq_push(ctx->queue, &rec);
-        }
 
         xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_DONE);
     }

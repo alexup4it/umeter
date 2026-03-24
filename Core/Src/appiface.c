@@ -9,7 +9,9 @@
 
 #include "actual.h"
 #include "cmsis_os.h"
+#include "event_groups.h"
 #include "fws.h"
+#include "ptasks.h"
 #include "rtctime.h"
 #include "siface.h"
 #include "strjson.h"
@@ -142,39 +144,6 @@ static int parse(struct appiface* self,
                          resp_size,
                          "period_anemometer",
                          self->uparams.period_anemometer);
-        } else if (jsoneq(request, tparam, "bat") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_uint(response, resp_size, "bat", self->actual->voltage);
-            xSemaphoreGive(self->actual->mutex);
-        } else if (jsoneq(request, tparam, "wind_speed") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_uint(response,
-                         resp_size,
-                         "wind_speed",
-                         self->actual->wind_speed);
-            xSemaphoreGive(self->actual->mutex);
-        } else if (jsoneq(request, tparam, "temp") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "temp", self->actual->temperature);
-            xSemaphoreGive(self->actual->mutex);
-        } else if (jsoneq(request, tparam, "hum") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_int(response, resp_size, "hum", self->actual->humidity);
-            xSemaphoreGive(self->actual->mutex);
-        } else if (jsoneq(request, tparam, "pressure") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_int(response,
-                        resp_size,
-                        "pressure",
-                        self->actual->pressure);
-            xSemaphoreGive(self->actual->mutex);
-        } else if (jsoneq(request, tparam, "wind_direction") == 0) {
-            xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
-            strjson_int(response,
-                        resp_size,
-                        "wind_direction",
-                        self->actual->wind_direction);
-            xSemaphoreGive(self->actual->mutex);
         } else if (jsoneq(request, tparam, "tamper") == 0) {
             return -1;  // TODO
         } else {
@@ -252,6 +221,34 @@ static int parse(struct appiface* self,
         } else {
             return -1;
         }
+    } else if (jsoneq(request, tcmd, "rd_sensors") == 0) {
+        /* Trigger a fresh sensor reading and wait for completion */
+        xEventGroupClearBits(task_events, TASK_EVENT_SENSORS_DONE);
+        xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_START);
+        EventBits_t bits = xEventGroupWaitBits(task_events,
+                                               TASK_EVENT_SENSORS_DONE,
+                                               pdTRUE,
+                                               pdFALSE,
+                                               pdMS_TO_TICKS(5000));
+
+        if (!(bits & TASK_EVENT_SENSORS_DONE)) {
+            return -1;
+        }
+
+        xSemaphoreTake(self->actual->mutex, portMAX_DELAY);
+        strjson_uint(response, resp_size, "bat", self->actual->voltage);
+        strjson_int(response, resp_size, "temp", self->actual->temperature);
+        strjson_int(response, resp_size, "hum", self->actual->humidity);
+        strjson_int(response, resp_size, "pressure", self->actual->pressure);
+        strjson_uint(response,
+                     resp_size,
+                     "wind_speed",
+                     self->actual->wind_speed);
+        strjson_int(response,
+                    resp_size,
+                    "wind_direction",
+                    self->actual->wind_direction);
+        xSemaphoreGive(self->actual->mutex);
     } else if (jsoneq(request, tcmd, "mem") == 0) {
         extern size_t stack_size(void);
 

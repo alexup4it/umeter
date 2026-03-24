@@ -214,8 +214,10 @@ static void pm_flash_spi_deinit(void) {
 /*---------------------------------------------------------------------------*/
 
 struct task_default_ctx task_default_ctx = {
+    .actual  = &actual,
     .logger  = &logger,
     .sensorq = &sensorq,
+    .cnt     = &cnt,
 };
 struct task_blink_ctx task_blink_ctx = {0};
 
@@ -235,19 +237,17 @@ struct task_anemometer_ctx task_anemometer_ctx = {
 
 struct task_sensors_ctx task_sensors_ctx = {
     .actual   = &actual,
-    .queue    = &sensorq,
     .as5600   = &pot,
     .aht20    = &aht,
     .icp201xx = &prs,
     .voltage  = &avlt,
-    .cnt      = &cnt,
 #ifdef LOGGER
     .logger = &logger,
 #endif
-    .sens_on      = pm_sens_on,
-    .sens_off     = pm_sens_off,
-    .aht20_on     = pm_aht20_on,
-    .aht20_off    = pm_aht20_off,
+    .sens_on   = pm_sens_on,
+    .sens_off  = pm_sens_off,
+    .aht20_on  = pm_aht20_on,
+    .aht20_off = pm_aht20_off,
 };
 
 struct task_modem_ctx task_modem_ctx = {

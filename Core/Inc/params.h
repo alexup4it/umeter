@@ -21,7 +21,7 @@
 
 #define PARAMS_FW_B1 0
 #define PARAMS_FW_B2 1
-#define PARAMS_FW_B3 0
+#define PARAMS_FW_B3 1
 #define PARAMS_FW_B4 0
 
 #define PARAMS_FW_VERSION                                              \
