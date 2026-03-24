@@ -1,8 +1,8 @@
 /*
  * ICP-20100 barometric pressure sensor
  *
- * Simplified driver for forced single-measurement mode.
- * Based on TDK InvenSense ICP-201xx reference driver.
+ * Driver based on TDK InvenSense Arduino ICP-201xx library.
+ * Matches the exact begin() + start() + getData() sequence.
  *
  * Pressure formula: P(kPa) = (POUT / 2^17) * 40 + 70
  * Output unit: centipascals (Pa * 100) for integer precision.
@@ -57,23 +57,14 @@
 #define BIT_POWER_MODE_POS       2
 #define BIT_FIFO_READOUT_MASK    0x03
 
-/* Operation mode 0 (MODE0): highest accuracy */
-#define OP_MODE0 0
-
-/* FIFO readout: pressure + temperature */
-#define FIFO_READOUT_PRES_TEMP 0
-
-/* Power mode normal */
-#define POWER_MODE_NORMAL (1 << BIT_POWER_MODE_POS)
-
-/* OTP status2 bootup mask */
-#define BOOTUP_STATUS_MASK 0x01
-
 /* FIFO level mask */
 #define FIFO_LEVEL_MASK 0x1F
 
 /* Max retries for polling loops */
 #define MAX_POLL_RETRIES 200
+
+/* FIR filter warmup: first 14 packets must be discarded */
+#define WARMUP_PACKETS 14
 
 /******************************************************************************/
 /* I2C helpers                                                                */
@@ -118,7 +109,10 @@ static int rd_reg_multi(struct icp201xx* self,
                : -1;
 }
 
-/* Wait for MODE_SELECT register to become accessible */
+/******************************************************************************/
+/* MODE_SELECT helpers (read-modify-write with mode_sync wait)                */
+/******************************************************************************/
+
 static int wait_mode_sync(struct icp201xx* self) {
     uint8_t status;
 
@@ -135,7 +129,6 @@ static int wait_mode_sync(struct icp201xx* self) {
     return -1;
 }
 
-/* Write MODE_SELECT with mode-sync wait */
 static int wr_mode_select(struct icp201xx* self, uint8_t val) {
     if (wait_mode_sync(self) != 0) {
         return -1;
@@ -143,14 +136,100 @@ static int wr_mode_select(struct icp201xx* self, uint8_t val) {
     return wr_reg(self, REG_MODE_SELECT, val);
 }
 
+static int wr_pow_mode(struct icp201xx* self, uint8_t mode) {
+    uint8_t reg;
+    if (rd_reg(self, REG_MODE_SELECT, &reg) != 0) {
+        return -1;
+    }
+    reg = (reg & ~(1 << BIT_POWER_MODE_POS)) |
+          ((mode & 0x01) << BIT_POWER_MODE_POS);
+    return wr_mode_select(self, reg);
+}
+
+static int wr_fifo_readout_mode(struct icp201xx* self, uint8_t mode) {
+    uint8_t reg;
+    if (rd_reg(self, REG_MODE_SELECT, &reg) != 0) {
+        return -1;
+    }
+    reg = (reg & ~BIT_FIFO_READOUT_MASK) | (mode & BIT_FIFO_READOUT_MASK);
+    return wr_mode_select(self, reg);
+}
+
+static int wr_meas_config(struct icp201xx* self, uint8_t mode) {
+    uint8_t reg;
+    if (rd_reg(self, REG_MODE_SELECT, &reg) != 0) {
+        return -1;
+    }
+    reg = (reg & ~(0x07 << BIT_MEAS_CONFIG_POS)) |
+          ((mode & 0x07) << BIT_MEAS_CONFIG_POS);
+    return wr_mode_select(self, reg);
+}
+
+static int wr_meas_mode(struct icp201xx* self, uint8_t mode) {
+    uint8_t reg;
+    if (rd_reg(self, REG_MODE_SELECT, &reg) != 0) {
+        return -1;
+    }
+    reg = (reg & ~(1 << BIT_MEAS_MODE_POS)) |
+          ((mode & 0x01) << BIT_MEAS_MODE_POS);
+    return wr_mode_select(self, reg);
+}
+
+static int wr_forced_meas_trigger(struct icp201xx* self, uint8_t trigger) {
+    uint8_t reg;
+    if (rd_reg(self, REG_MODE_SELECT, &reg) != 0) {
+        return -1;
+    }
+    reg = (reg & ~(1 << BIT_FORCED_MEAS_TRIG_POS)) |
+          ((trigger & 0x01) << BIT_FORCED_MEAS_TRIG_POS);
+    return wr_mode_select(self, reg);
+}
+
 /******************************************************************************/
-/* OTP bootup configuration (required for A1 silicon)                         */
+/* Flush FIFO                                                                 */
+/******************************************************************************/
+
+static int flush_fifo(struct icp201xx* self) {
+    uint8_t val;
+
+    if (rd_reg(self, REG_FIFO_FILL, &val) != 0) {
+        return -1;
+    }
+    return wr_reg(self, REG_FIFO_FILL, val | 0x80);
+}
+
+/******************************************************************************/
+/* OTP single-byte read helper                                                */
+/******************************************************************************/
+
+static int otp_read_byte(struct icp201xx* self, uint8_t addr, uint8_t* val) {
+    uint8_t status;
+
+    wr_reg(self, REG_OTP_ADDR, addr);
+    wr_reg(self, REG_OTP_CMD, 0x10);
+
+    for (int i = 0; i < MAX_POLL_RETRIES; i++) {
+        if (rd_reg(self, REG_OTP_STATUS, &status) != 0) {
+            return -1;
+        }
+        if (status == 0) {
+            return rd_reg(self, REG_OTP_RD_DATA, val);
+        }
+        if (i == MAX_POLL_RETRIES - 1) {
+            return -1;
+        }
+    }
+
+    return -1;
+}
+
+/******************************************************************************/
+/* OTP bootup configuration (required for A1 silicon, skipped for B2)         */
 /******************************************************************************/
 
 static int otp_bootup(struct icp201xx* self) {
     uint8_t version;
     uint8_t bootup;
-    uint8_t otp_status;
     uint8_t offset, gain, hfosc;
     uint8_t reg;
 
@@ -166,12 +245,12 @@ static int otp_bootup(struct icp201xx* self) {
     if (rd_reg(self, REG_OTP_STATUS2, &bootup) != 0) {
         return -1;
     }
-    if (bootup & BOOTUP_STATUS_MASK) {
+    if (bootup & 0x01) {
         return 0;
     }
 
-    /* Enter power mode */
-    if (wr_mode_select(self, POWER_MODE_NORMAL) != 0) {
+    /* Set power mode active for OTP access (bit 2 = 1) */
+    if (wr_mode_select(self, 0x04) != 0) {
         return -1;
     }
     osDelay(pdMS_TO_TICKS(4));
@@ -198,153 +277,144 @@ static int otp_bootup(struct icp201xx* self) {
     }
 
     /* Program redundant read */
-    if (wr_reg(self, REG_OTP_MRA_LSB, 0x04) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_MRA_MSB, 0x04) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_MRB_LSB, 0x21) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_MRB_MSB, 0x20) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_MR_LSB, 0x10) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_MR_MSB, 0x80) != 0) {
-        return -1;
-    }
+    wr_reg(self, REG_OTP_MRA_LSB, 0x04);
+    wr_reg(self, REG_OTP_MRA_MSB, 0x04);
+    wr_reg(self, REG_OTP_MRB_LSB, 0x21);
+    wr_reg(self, REG_OTP_MRB_MSB, 0x20);
+    wr_reg(self, REG_OTP_MR_LSB, 0x10);
+    wr_reg(self, REG_OTP_MR_MSB, 0x80);
 
-    /* Read offset from OTP address 0xF8 */
-    if (wr_reg(self, REG_OTP_ADDR, 0xF8) != 0) {
+    /* Read offset, gain, HFOSC from OTP */
+    if (otp_read_byte(self, 0xF8, &offset) != 0) {
         return -1;
     }
-    if (wr_reg(self, REG_OTP_CMD, 0x10) != 0) {
+    if (otp_read_byte(self, 0xF9, &gain) != 0) {
         return -1;
     }
-    for (int i = 0; i < MAX_POLL_RETRIES; i++) {
-        if (rd_reg(self, REG_OTP_STATUS, &otp_status) != 0) {
-            return -1;
-        }
-        if (otp_status == 0) {
-            break;
-        }
-        if (i == MAX_POLL_RETRIES - 1) {
-            return -1;
-        }
-    }
-    if (rd_reg(self, REG_OTP_RD_DATA, &offset) != 0) {
-        return -1;
-    }
-
-    /* Read gain from OTP address 0xF9 */
-    if (wr_reg(self, REG_OTP_ADDR, 0xF9) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_CMD, 0x10) != 0) {
-        return -1;
-    }
-    for (int i = 0; i < MAX_POLL_RETRIES; i++) {
-        if (rd_reg(self, REG_OTP_STATUS, &otp_status) != 0) {
-            return -1;
-        }
-        if (otp_status == 0) {
-            break;
-        }
-        if (i == MAX_POLL_RETRIES - 1) {
-            return -1;
-        }
-    }
-    if (rd_reg(self, REG_OTP_RD_DATA, &gain) != 0) {
-        return -1;
-    }
-
-    /* Read HFOSC from OTP address 0xFA */
-    if (wr_reg(self, REG_OTP_ADDR, 0xFA) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_CMD, 0x10) != 0) {
-        return -1;
-    }
-    for (int i = 0; i < MAX_POLL_RETRIES; i++) {
-        if (rd_reg(self, REG_OTP_STATUS, &otp_status) != 0) {
-            return -1;
-        }
-        if (otp_status == 0) {
-            break;
-        }
-        if (i == MAX_POLL_RETRIES - 1) {
-            return -1;
-        }
-    }
-    if (rd_reg(self, REG_OTP_RD_DATA, &hfosc) != 0) {
+    if (otp_read_byte(self, 0xFA, &hfosc) != 0) {
         return -1;
     }
 
     /* Disable OTP */
-    if (wr_reg(self, REG_OTP_CFG1, 0x00) != 0) {
-        return -1;
-    }
+    wr_reg(self, REG_OTP_CFG1, 0x00);
 
     /* Write trim values to main registers */
-    /* offset: TRIM1_MSB[5:0] */
-    if (rd_reg(self, REG_TRIM1_MSB, &reg) != 0) {
-        return -1;
+    if (rd_reg(self, REG_TRIM1_MSB, &reg) == 0) {
+        wr_reg(self, REG_TRIM1_MSB, (reg & 0xC0) | (offset & 0x3F));
     }
-    if (wr_reg(self, REG_TRIM1_MSB, (reg & 0xC0) | (offset & 0x3F)) != 0) {
-        return -1;
+    if (rd_reg(self, REG_TRIM2_MSB, &reg) == 0) {
+        wr_reg(self, REG_TRIM2_MSB, (reg & 0x8F) | ((gain & 0x07) << 4));
     }
-
-    /* gain: TRIM2_MSB[6:4] */
-    if (rd_reg(self, REG_TRIM2_MSB, &reg) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_TRIM2_MSB, (reg & 0x8F) | ((gain & 0x07) << 4)) != 0) {
-        return -1;
-    }
-
-    /* hfosc: TRIM2_LSB[6:0] */
-    if (rd_reg(self, REG_TRIM2_LSB, &reg) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_TRIM2_LSB, (reg & 0x80) | (hfosc & 0x7F)) != 0) {
-        return -1;
+    if (rd_reg(self, REG_TRIM2_LSB, &reg) == 0) {
+        wr_reg(self, REG_TRIM2_LSB, (reg & 0x80) | (hfosc & 0x7F));
     }
 
     /* Lock main registers */
-    if (wr_reg(self, REG_MASTER_LOCK, 0x00) != 0) {
-        return -1;
-    }
+    wr_reg(self, REG_MASTER_LOCK, 0x00);
 
     /* Standby */
-    if (wr_mode_select(self, 0x00) != 0) {
-        return -1;
-    }
+    wr_mode_select(self, 0x00);
 
     /* Mark bootup done */
-    if (rd_reg(self, REG_OTP_STATUS2, &reg) != 0) {
-        return -1;
-    }
-    if (wr_reg(self, REG_OTP_STATUS2, reg | BOOTUP_STATUS_MASK) != 0) {
-        return -1;
+    if (rd_reg(self, REG_OTP_STATUS2, &reg) == 0) {
+        wr_reg(self, REG_OTP_STATUS2, reg | 0x01);
     }
 
     return 0;
 }
 
 /******************************************************************************/
-/* Flush FIFO                                                                 */
+/* Soft reset (matches inv_icp201xx_soft_reset exactly)                       */
 /******************************************************************************/
 
-static int flush_fifo(struct icp201xx* self) {
-    uint8_t val;
+static int soft_reset(struct icp201xx* self) {
+    uint8_t int_status;
 
-    if (rd_reg(self, REG_FIFO_FILL, &val) != 0) {
+    if (wr_mode_select(self, 0x00) != 0) {
         return -1;
     }
-    return wr_reg(self, REG_FIFO_FILL, val | 0x80);
+    osDelay(pdMS_TO_TICKS(2));
+
+    flush_fifo(self);
+
+    /* set_fifo_notification_config(0, 0, 0) → fifo_config = 0 */
+    wr_reg(self, REG_FIFO_CONFIG, 0x00);
+
+    /* Mask all interrupts */
+    wr_reg(self, REG_INT_MASK, 0xFF);
+
+    /* Clear pending interrupts */
+    if (rd_reg(self, REG_INT_STATUS, &int_status) == 0 && int_status) {
+        wr_reg(self, REG_INT_STATUS, int_status);
+    }
+
+    return 0;
+}
+
+/******************************************************************************/
+/* Config: OP_MODE4 (highest accuracy), PRES_TEMP, continuous                 */
+/******************************************************************************/
+
+static int config(struct icp201xx* self) {
+    uint8_t int_status;
+
+    /* Standby */
+    if (wr_mode_select(self, 0x00) != 0) {
+        return -1;
+    }
+
+    /* Flush FIFO */
+    flush_fifo(self);
+
+    /* Clear interrupts */
+    if (rd_reg(self, REG_INT_STATUS, &int_status) == 0 && int_status) {
+        wr_reg(self, REG_INT_STATUS, int_status);
+    }
+
+    /* forced_meas_trigger = STANDBY (0) */
+    wr_forced_meas_trigger(self, 0);
+
+    /* power_mode = NORMAL (0) */
+    wr_pow_mode(self, 0);
+
+    /* fifo_readout_mode = PRES_TEMP (0) */
+    wr_fifo_readout_mode(self, 0);
+
+    /* meas_config = OP_MODE4 (highest accuracy) */
+    wr_meas_config(self, 4);
+
+    /* meas_mode = CONTINUOUS (1) */
+    wr_meas_mode(self, 1);
+
+    return 0;
+}
+
+/******************************************************************************/
+/* Warmup: discard first 14 FIR filter packets (matches app_warmup)           */
+/******************************************************************************/
+
+static int warmup(struct icp201xx* self) {
+    uint8_t fifo_count;
+    uint8_t int_status;
+
+    for (int i = 0; i < MAX_POLL_RETRIES * 10; i++) {
+        if (rd_reg(self, REG_FIFO_FILL, &fifo_count) != 0) {
+            return -1;
+        }
+        if ((fifo_count & FIFO_LEVEL_MASK) >= WARMUP_PACKETS) {
+            /* Discard all warmup packets */
+            flush_fifo(self);
+
+            /* Clear interrupts */
+            if (rd_reg(self, REG_INT_STATUS, &int_status) == 0 && int_status) {
+                wr_reg(self, REG_INT_STATUS, int_status);
+            }
+            return 0;
+        }
+        osDelay(pdMS_TO_TICKS(2));
+    }
+
+    return -1;
 }
 
 /******************************************************************************/
@@ -357,13 +427,26 @@ void icp201xx_init(struct icp201xx* self, I2C_HandleTypeDef* i2c) {
 }
 
 /******************************************************************************/
+/* Matches Arduino begin(): init → soft_reset → devid check → OTP bootup     */
+/******************************************************************************/
+
 int icp201xx_is_available(struct icp201xx* self) {
     uint8_t id;
 
-    /* Dummy write to 0xEE to ensure sensor is initialized */
-    wr_reg(self, 0xEE, 0xF0);
-    osDelay(pdMS_TO_TICKS(1));
+    /* inv_icp201xx_init: dummy write to 0xEE until success */
+    for (int i = 0; i < MAX_POLL_RETRIES; i++) {
+        if (wr_reg(self, 0xEE, 0xF0) == 0) {
+            break;
+        }
+        osDelay(pdMS_TO_TICKS(1));
+    }
 
+    /* inv_icp201xx_soft_reset */
+    if (soft_reset(self) != 0) {
+        return -1;
+    }
+
+    /* inv_icp201xx_get_devid_version: check WHOAMI */
     if (rd_reg(self, REG_DEVICE_ID, &id) != 0) {
         return -1;
     }
@@ -371,7 +454,7 @@ int icp201xx_is_available(struct icp201xx* self) {
         return -1;
     }
 
-    /* Run OTP bootup configuration */
+    /* inv_icp201xx_OTP_bootup_cfg */
     if (otp_bootup(self) != 0) {
         return -1;
     }
@@ -380,6 +463,10 @@ int icp201xx_is_available(struct icp201xx* self) {
 }
 
 /******************************************************************************/
+/* Matches Arduino start() + getData():                                       */
+/*   soft_reset → config → warmup → wait for data → read FIFO                */
+/******************************************************************************/
+
 int icp201xx_read(struct icp201xx* self, int32_t* pressure) {
     uint8_t reg;
     uint8_t fifo_level;
@@ -387,53 +474,29 @@ int icp201xx_read(struct icp201xx* self, int32_t* pressure) {
     int32_t raw_press;
 
     /*
-     * Soft-reset sequence:
-     * 1. Standby
-     * 2. Flush FIFO
-     * 3. Clear interrupts
+     * After power cycle, is_available() already did:
+     *   init → soft_reset → devid → OTP bootup
+     *
+     * Now do start() sequence:
+     *   soft_reset → config → warmup → read
      */
-    if (wr_mode_select(self, 0x00) != 0) {
-        return -1;
-    }
-    osDelay(pdMS_TO_TICKS(2));
 
-    if (flush_fifo(self) != 0) {
+    /* soft_reset (Arduino: start() calls soft_reset again) */
+    if (soft_reset(self) != 0) {
         return -1;
     }
 
-    /* Mask all interrupts */
-    if (wr_reg(self, REG_INT_MASK, 0xFF) != 0) {
+    /* config: MODE0 continuous PRES_TEMP */
+    if (config(self) != 0) {
         return -1;
     }
 
-    /* Clear pending interrupts */
-    if (rd_reg(self, REG_INT_STATUS, &reg) != 0) {
-        return -1;
-    }
-    if (reg) {
-        if (wr_reg(self, REG_INT_STATUS, reg) != 0) {
-            return -1;
-        }
-    }
-
-    /*
-     * Configure forced measurement:
-     * - OP_MODE0 (bits [7:5] = 0)
-     * - Forced trigger (bit 4 = 1)
-     * - Forced trigger mode (bit 3 = 0)
-     * - Normal power mode (bit 2 = 1)
-     * - FIFO readout: press + temp (bits [1:0] = 0)
-     */
-    reg = (OP_MODE0 << BIT_MEAS_CONFIG_POS) | (1 << BIT_FORCED_MEAS_TRIG_POS) |
-          POWER_MODE_NORMAL | FIFO_READOUT_PRES_TEMP;
-    if (wr_mode_select(self, reg) != 0) {
+    /* Warmup: discard first 14 packets (FIR filter settling) */
+    if (warmup(self) != 0) {
         return -1;
     }
 
-    /* Wait for measurement (MODE0 takes ~25ms typical) */
-    osDelay(pdMS_TO_TICKS(30));
-
-    /* Wait for data in FIFO */
+    /* Wait for fresh data after warmup */
     for (int i = 0; i < MAX_POLL_RETRIES; i++) {
         if (rd_reg(self, REG_FIFO_FILL, &fifo_level) != 0) {
             return -1;
