@@ -20,17 +20,8 @@
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
 
-enum {
-    AVAIL_VOL      = 0x01,
-    AVAIL_HALL     = 0x02,
-    AVAIL_AHT20    = 0x08,
-    AVAIL_ICP201XX = 0x40,
-    AVAIL_AS5600   = 0x20,
-};
-
 void task_sensors(void* argument) {
     struct task_sensors_ctx* ctx = argument;
-    int avail                    = 0;
     int ret;
 
     int32_t temperature        = -1;
@@ -39,47 +30,17 @@ void task_sensors(void* argument) {
     int32_t wind_direction     = -1;
     int32_t wind_direction_raw = -1;
     int voltage                = -1;
-    uint32_t ts;
 
-    char* tmp;
+    LOG_I(ctx->logger, TAG, "init");
 
-    /* Check sensor availability */
 #ifdef AVOLTAGE_CALIB
     ret = avoltage_calib(ctx->voltage);
     if (!ret) {
-        avail |= AVAIL_VOL;
+        LOG_I(ctx->logger, TAG, "avoltage calib ok");
+    } else {
+        LOG_E(ctx->logger, TAG, "avoltage calib fail");
     }
 #endif
-    avail |= AVAIL_VOL;
-
-    ctx->aht20_on();
-    ret = aht20_is_available(ctx->aht20);
-    ctx->aht20_off();
-    if (!ret) {
-        avail |= AVAIL_AHT20;
-    }
-
-    ctx->sens_on();
-    ret = as5600_is_available(ctx->as5600);
-    if (!ret) {
-        avail |= AVAIL_AS5600;
-    }
-    ret = icp201xx_is_available(ctx->icp201xx);
-    if (!ret) {
-        avail |= AVAIL_ICP201XX;
-    }
-    ctx->sens_off();
-
-    xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
-    xSemaphoreGive(ctx->actual->mutex);
-
-    tmp = pvPortMalloc(sizeof(avail) * 8 + 2);
-    if (tmp) {
-        itoa(avail, tmp, 2);
-        strcat(tmp, "b");
-        LOG_I(ctx->logger, TAG, tmp);
-        vPortFree(tmp);
-    }
 
     for (;;) {
         xEventGroupWaitBits(task_events,
@@ -90,40 +51,55 @@ void task_sensors(void* argument) {
 
         led_blink(2);
 
-        if (avail & AVAIL_VOL) {
-            voltage = avoltage(ctx->voltage);
+        /* Voltage */
+        voltage = avoltage(ctx->voltage);
+        if (voltage < 0) {
+            LOG_E(ctx->logger, TAG, "voltage fail");
         }
-        if (avail & AVAIL_AHT20) {
-            ctx->aht20_on();
-            aht20_read(ctx->aht20, &temperature, &humidity);
-            ctx->aht20_off();
+
+        /* AHT20: temperature + humidity */
+        ctx->aht20_on();
+        ret = aht20_read(ctx->aht20, &temperature, &humidity);
+        ctx->aht20_off();
+        if (ret != 0) {
+            LOG_E(ctx->logger, TAG, "aht20 fail");
         }
-        if ((avail & AVAIL_AS5600) || (avail & AVAIL_ICP201XX)) {
-            ctx->sens_on();
-            if (avail & AVAIL_AS5600) {
-                wind_direction_raw = as5600_read(ctx->as5600);
-                if (wind_direction_raw >= 0) {
-                    if (wind_direction_raw >= params.offset_angle) {
-                        wind_direction =
-                            wind_direction_raw - params.offset_angle;
-                    } else {
-                        wind_direction = ANGLE_MAX + wind_direction_raw -
-                                         params.offset_angle;
-                    }
-                }
+
+        /* AS5600 + ICP-201xx share one I2C bus */
+        ctx->sens_on();
+
+        /* ICP-201xx: pressure (requires begin() before each read) */
+        ret = icp201xx_is_available(ctx->icp201xx);
+        if (ret != 0) {
+            LOG_E(ctx->logger, TAG, "icp begin fail");
+        } else {
+            ret = icp201xx_read(ctx->icp201xx, &pressure);
+            if (ret != 0) {
+                LOG_E(ctx->logger, TAG, "icp read fail");
             }
-            if (avail & AVAIL_ICP201XX) {
-                icp201xx_read(ctx->icp201xx, &pressure);
-            }
-            ctx->sens_off();
         }
+
+        /* AS5600: wind direction */
+        wind_direction_raw = as5600_read(ctx->as5600);
+        if (wind_direction_raw >= 0) {
+            if (wind_direction_raw >= params.offset_angle) {
+                wind_direction = wind_direction_raw - params.offset_angle;
+            } else {
+                wind_direction =
+                    ANGLE_MAX + wind_direction_raw - params.offset_angle;
+            }
+        } else {
+            LOG_E(ctx->logger, TAG, "as5600 fail");
+        }
+
+        ctx->sens_off();
 
         xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
         ctx->actual->voltage        = voltage;
         ctx->actual->temperature    = temperature;
         ctx->actual->humidity       = humidity;
-        ctx->actual->wind_direction = wind_direction;
         ctx->actual->pressure       = pressure;
+        ctx->actual->wind_direction = wind_direction;
         xSemaphoreGive(ctx->actual->mutex);
 
         xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_DONE);

@@ -18,7 +18,6 @@ enum as5600_status {
 };
 
 void as5600_init(struct as5600* self, I2C_HandleTypeDef* i2c);
-int as5600_is_available(struct as5600* self);
 int as5600_status(struct as5600* self);
 int32_t as5600_read(struct as5600* self);
 

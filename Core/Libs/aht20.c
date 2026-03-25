@@ -32,26 +32,6 @@ void aht20_init(struct aht20* self, I2C_HandleTypeDef* i2c) {
     self->i2c = i2c;
 }
 
-/******************************************************************************/
-int aht20_is_available(struct aht20* self) {
-    HAL_StatusTypeDef status;
-    uint8_t buf;
-
-    status = HAL_I2C_Mem_Read(self->i2c,
-                              I2C_ADDRESS,
-                              I2C_CMD_STATUS,
-                              I2C_MEMADD_SIZE_8BIT,
-                              &buf,
-                              1,
-                              I2C_TIMEOUT);
-
-    if (status != HAL_OK) {
-        return -1;
-    }
-
-    return 0;
-}
-
 static uint8_t calc_crc8(uint8_t* data, size_t size) {
     uint8_t crc = CRC_INITIAL_VALUE;
 

@@ -46,11 +46,6 @@ static int get_status(struct as5600* self) {
 }
 
 /******************************************************************************/
-int as5600_is_available(struct as5600* self) {
-    return get_status(self) < 0 ? -1 : 0;
-}
-
-/******************************************************************************/
 int as5600_status(struct as5600* self) {
     int status = get_status(self);
     return status < 0 ? -1 : status & REG_STATUS_MASK;
