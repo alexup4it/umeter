@@ -26,6 +26,9 @@ extern EventGroupHandle_t task_events;
 #define TASK_EVENT_SENSORS_DONE    (1 << 5)
 #define TASK_EVENT_TIME_SYNCED     (1 << 6)
 
+/* Cross-task trigger bits */
+#define TASK_EVENT_OTA_START (1 << 7)
+
 /**
  * Create event group. Call before scheduler starts.
  */

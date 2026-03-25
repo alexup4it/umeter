@@ -36,14 +36,12 @@ enum fws_status {
 /**
  * @brief: Firmware header
  * @param loaded: Firmware was already loaded (!= 0) or not (== 0)
- * @param version: Firmware version
  * @param size: Firmware size in bytes
  * @param checksum: Checksum
  * Sum of all firmware data (uint32_t) + FWS_CHECKSUM_INIT
  */
 struct fws {
     uint32_t loaded;
-    uint32_t version;
     uint32_t size;
     uint32_t checksum;
 };

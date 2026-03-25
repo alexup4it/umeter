@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cmsis_os.h"
+#include "FreeRTOS.h"
 #include "task.h"
 
 #define JSMN_HEADER
@@ -24,9 +24,7 @@
 
 static struct w25q_s* s_mem;
 
-#define OTA_CHECK_INTERVAL_MS (2 * 60 * 60 * 1000)  // 2 hours
-
-#define JSON_MAX_TOKENS 32
+#define JSON_MAX_TOKENS 16
 
 #define FILE_PART_SIZE   2048
 #define FLASH_WRITE_SIZE 128
@@ -61,10 +59,8 @@ static int parse_json(const char* response,
                       size_t mlen) {
     jsmn_parser parser;
     jsmntok_t tokens[JSON_MAX_TOKENS];
-    jsmntok_t* object;
-    jsmntok_t *token_file, *token_ver, *token_cs, *token_size;
-    uint32_t vermax = 0;
-    int i, ret;
+    jsmntok_t *token_file = NULL, *token_cs = NULL, *token_size = NULL;
+    int ret;
 
     memset(tokens, 0, sizeof(tokens));
     jsmn_init(&parser);
@@ -78,59 +74,37 @@ static int parse_json(const char* response,
         return -1;
     }
 
-    if (tokens[0].type != JSMN_ARRAY) {
+    if (tokens[0].type != JSMN_OBJECT) {
         return -1;
     }
 
-    i = 1;
-    for (int objs = 0; objs < tokens[0].size && i < ret; objs++) {
-        object = &tokens[i];
-        if (object->type != JSMN_OBJECT) {
-            return -1;
-        }
-
-        i++;
-        token_file = NULL;
-        token_ver  = NULL;
-        token_cs   = NULL;
-        token_size = NULL;
-        for (int items = 0; items < object->size && (i + 1) < ret; items++) {
-            if (jsoneq(response, &tokens[i], "file") == 0) {
-                token_file = &tokens[i + 1];
-            } else if (jsoneq(response, &tokens[i], "ver") == 0) {
-                token_ver = &tokens[i + 1];
-            } else if (jsoneq(response, &tokens[i], "checksum") == 0) {
-                token_cs = &tokens[i + 1];
-            } else if (jsoneq(response, &tokens[i], "size") == 0) {
-                token_size = &tokens[i + 1];
-            }
-
-            i += 2;
-        }
-
-        if (token_file && token_ver && token_cs && token_size) {
-            char temp[16];
-            uint32_t ver;
-
-            jsoncpy(response, token_ver, temp, sizeof(temp));
-            ver = strtoul(temp, NULL, 0);
-
-            if (ver > vermax) {
-                vermax = ver;
-
-                fws->loaded  = 0;
-                fws->version = ver;
-                jsoncpy(response, token_cs, temp, sizeof(temp));
-                fws->checksum = strtoul(temp, NULL, 0);
-                jsoncpy(response, token_size, temp, sizeof(temp));
-                fws->size = strtoul(temp, NULL, 0);
-
-                jsoncpy(response, token_file, filename, mlen);
-            }
+    for (int i = 1; (i + 1) < ret; i += 2) {
+        if (jsoneq(response, &tokens[i], "file") == 0) {
+            token_file = &tokens[i + 1];
+        } else if (jsoneq(response, &tokens[i], "checksum") == 0) {
+            token_cs = &tokens[i + 1];
+        } else if (jsoneq(response, &tokens[i], "size") == 0) {
+            token_size = &tokens[i + 1];
         }
     }
 
-    return vermax;
+    if (!token_file || !token_cs || !token_size) {
+        return -1;
+    }
+
+    char temp[16];
+
+    fws->loaded = 0;
+
+    jsoncpy(response, token_cs, temp, sizeof(temp));
+    fws->checksum = strtoul(temp, NULL, 0);
+
+    jsoncpy(response, token_size, temp, sizeof(temp));
+    fws->size = strtoul(temp, NULL, 0);
+
+    jsoncpy(response, token_file, filename, mlen);
+
+    return 0;
 }
 
 static void strtolower(char* data) {
@@ -251,24 +225,35 @@ static void ota_check_update(struct logger* logger) {
     /* Request firmware list */
     LOG_I(logger, TAG, "checking for update");
     strcpy(url, params.url_ota);
-    strcat(url, "/api/ota/list?name=");
-    strcat(url, PARAMS_DEVICE_NAME);
+    strcat(url, "/api/ota?uid=");
+    {
+        char uid_str[12];
+        utoa(params.id, uid_str, 10);
+        strcat(url, uid_str);
+    }
 
     memset(&response, 0, sizeof(response));
     ret = ota_http_get(url, hmac_buf, &response);
-    if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
-        LOG_W(logger, TAG, "list request failed");
+
+    /* No update available */
+    if (ret == 204) {
+        LOG_I(logger, TAG, "no update available");
         ota_response_free(&response);
         return;
     }
 
-    /* Parse firmware list */
+    if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
+        LOG_W(logger, TAG, "ota request failed");
+        ota_response_free(&response);
+        return;
+    }
+
+    /* Parse firmware info */
     ret = parse_json(response.body, &fws, filename, sizeof(filename));
     ota_response_free(&response);
 
-    /* No update or error */
-    if (ret <= PARAMS_FW_VERSION) {
-        LOG_I(logger, TAG, "no update available");
+    if (ret != 0) {
+        LOG_E(logger, TAG, "invalid ota response");
         return;
     }
 
@@ -341,7 +326,7 @@ static void ota_check_update(struct logger* logger) {
     flash_write_header(&fws);
 
     /* Reset */
-    osDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(100));
     NVIC_SystemReset();
 }
 
@@ -360,9 +345,14 @@ void task_ota(void* argument) {
     w25q_power_down(&s_mem->mem);
 
     for (;;) {
+        xEventGroupWaitBits(task_events,
+                            TASK_EVENT_OTA_START,
+                            pdTRUE,
+                            pdFALSE,
+                            portMAX_DELAY);
+
         w25q_power_on(&s_mem->mem);
         ota_check_update(ctx->logger);
         w25q_power_down(&s_mem->mem);
-        osDelay(pdMS_TO_TICKS(OTA_CHECK_INTERVAL_MS));
     }
 }

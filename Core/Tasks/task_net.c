@@ -24,7 +24,7 @@
 
 #define TAG "NET"
 
-#define JSON_MAX_TOKENS       8
+#define JSON_MAX_TOKENS       16
 #define MAX_RECORDS_PER_BATCH 50
 #define SEND_RETRIES          3
 #define REQUEST_BODY_SIZE     1024
@@ -83,6 +83,149 @@ static int parse_time_response(const char* json, uint32_t* timestamp_out) {
     }
 
     return -1;
+}
+
+/* Forward declarations for functions used by check_server_response chain */
+static void check_server_response(const char* json, struct net_ctx* ctx);
+static void request_config(struct net_ctx* ctx);
+static bool verify_response(const char* body,
+                            size_t length,
+                            const char* authorization,
+                            char* hmac_buffer);
+static void response_free(struct sim800l_http_response* response);
+
+/**
+ * Parse fw_update / cfg_update boolean flags from any server JSON response.
+ * If fw_update is true  → set TASK_EVENT_OTA_START.
+ * If cfg_update is true → fetch /api/config, apply, save, reset.
+ */
+static void check_server_response(const char* json, struct net_ctx* ctx) {
+    jsmn_parser parser;
+    jsmntok_t tokens[JSON_MAX_TOKENS] = {0};
+    bool fw_update                    = false;
+    bool cfg_update                   = false;
+
+    if (!json) {
+        return;
+    }
+
+    jsmn_init(&parser);
+    int count =
+        jsmn_parse(&parser, json, strlen(json), tokens, JSON_MAX_TOKENS);
+
+    if (count <= 0 || tokens[0].type != JSMN_OBJECT) {
+        return;
+    }
+
+    for (int i = 1; (i + 1) < count; i += 2) {
+        if (jsoneq(json, &tokens[i], "fw_update") == 0) {
+            fw_update = strncmp(json + tokens[i + 1].start, "true", 4) == 0;
+        } else if (jsoneq(json, &tokens[i], "cfg_update") == 0) {
+            cfg_update = strncmp(json + tokens[i + 1].start, "true", 4) == 0;
+        }
+    }
+
+    if (fw_update) {
+        xEventGroupSetBits(task_events, TASK_EVENT_OTA_START);
+    }
+
+    if (cfg_update) {
+        request_config(ctx);
+    }
+}
+
+/**
+ * Parse /api/config response and apply matching fields to params.
+ * Returns 0 on success, -1 on failure.
+ */
+static int parse_config_response(const char* json) {
+    jsmn_parser parser;
+    jsmntok_t tokens[JSON_MAX_TOKENS] = {0};
+
+    jsmn_init(&parser);
+    int count =
+        jsmn_parse(&parser, json, strlen(json), tokens, JSON_MAX_TOKENS);
+
+    if (count <= 0 || tokens[0].type != JSMN_OBJECT) {
+        return -1;
+    }
+
+    for (int i = 1; (i + 1) < count; i += 2) {
+        jsmntok_t* val = &tokens[i + 1];
+        size_t len     = val->end - val->start;
+
+        if (jsoneq(json, &tokens[i], "apn") == 0) {
+            size_t n =
+                len < (sizeof(params.apn) - 1) ? len : (sizeof(params.apn) - 1);
+            strncpy(params.apn, json + val->start, n);
+            params.apn[n] = '\0';
+        } else if (jsoneq(json, &tokens[i], "url_ota") == 0) {
+            size_t n = len < (sizeof(params.url_ota) - 1)
+                           ? len
+                           : (sizeof(params.url_ota) - 1);
+            strncpy(params.url_ota, json + val->start, n);
+            params.url_ota[n] = '\0';
+        } else if (jsoneq(json, &tokens[i], "url_app") == 0) {
+            size_t n = len < (sizeof(params.url_app) - 1)
+                           ? len
+                           : (sizeof(params.url_app) - 1);
+            strncpy(params.url_app, json + val->start, n);
+            params.url_app[n] = '\0';
+        } else if (jsoneq(json, &tokens[i], "period_upload") == 0) {
+            params.period_upload = strtoul(json + val->start, NULL, 0);
+        } else if (jsoneq(json, &tokens[i], "period_sensors") == 0) {
+            params.period_sensors = strtoul(json + val->start, NULL, 0);
+        } else if (jsoneq(json, &tokens[i], "period_anemometer") == 0) {
+            params.period_anemometer = strtoul(json + val->start, NULL, 0);
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * GET /api/config — fetch remote configuration, apply to params, save, reset.
+ */
+static void request_config(struct net_ctx* ctx) {
+    struct sim800l_http_response response = {0};
+    struct modem_request request          = {0};
+
+    strcpy(ctx->url, params.url_app);
+    strcat(ctx->url, "/api/config?uid=");
+    {
+        char uid_str[12];
+        utoa(params.id, uid_str, 10);
+        strcat(ctx->url, uid_str);
+    }
+
+    request.type      = MODEM_REQ_HTTP_GET;
+    request.url       = ctx->url;
+    request.read_auth = true;
+    request.response  = &response;
+
+    if (modem_execute(&request) != 200) {
+        response_free(&response);
+        return;
+    }
+
+    if (!verify_response(response.body,
+                         response.body_length,
+                         response.authorization,
+                         ctx->hmac)) {
+        response_free(&response);
+        return;
+    }
+
+    LOG_I(ctx->logger, TAG, "config received");
+
+    if (parse_config_response(response.body) == 0) {
+        vTaskSuspendAll();
+        params_set(&params);
+        response_free(&response);
+        NVIC_SystemReset();
+    }
+
+    response_free(&response);
 }
 
 static bool verify_response(const char* body,
@@ -211,6 +354,8 @@ static int request_time(struct net_ctx* ctx) {
 
         set_timestamp(ts);
 
+        check_server_response(response.body, ctx);
+
         LOG_I(ctx->logger, TAG, response.body);
 
         ret = 0;
@@ -240,6 +385,10 @@ static int request_post(struct net_ctx* ctx, const char* api) {
 
     int result = modem_execute(&request);
 
+    if (result == 200 && response.body) {
+        check_server_response(response.body, ctx);
+    }
+
     response_free(&response);
 
     return (result == 200) ? 0 : -1;
@@ -264,6 +413,10 @@ static int request_post_bin(struct net_ctx* ctx,
     request.response    = &response;
 
     int result = modem_execute(&request);
+
+    if (result == 200 && response.body) {
+        check_server_response(response.body, ctx);
+    }
 
     response_free(&response);
 
@@ -369,7 +522,7 @@ void task_net(void* argument) {
     TickType_t last_time_update = 0;
 
     /* ------------------------------------------------------------------ */
-    /* Startup sequence                                                    */
+    /* Startup sequence                                                   */
     /* ------------------------------------------------------------------ */
 
     wait_for_net_event();
