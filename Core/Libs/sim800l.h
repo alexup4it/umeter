@@ -1,218 +1,154 @@
 /*
- * SIM800L library
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
+ * SIM800L driver (synchronous blocking API)
  */
 
 #ifndef SIM800L_H_
 #define SIM800L_H_
 
 #include <stdbool.h>
-
-#include "stm32f4xx_hal.h"
+#include <stddef.h>
+#include <stdint.h>
 
 #include "cmsis_os.h"
-#include "queue.h"
+#include "stm32f4xx_hal.h"
 #include "stream_buffer.h"
 
-#define SIM800L_BUFFER_SIZE 1024
+struct logger;
+
+#define SIM800L_BUFFER_SIZE      1024
 #define SIM800L_UART_BUFFER_SIZE 128
+#define SIM800L_APN_SIZE         32
 
-#define SIM800L_TASK_QUEUE_SIZE 10
-
-#define SIM800L_APN_SIZE 32
-
-#define SIM800L_NETSCAN_DONE 1
-
-typedef uint64_t timeout_t;
-
-typedef void (*sim800l_cb)(int, void *);
-typedef void (*sim800l_hw_init)(void);
-
-/*
- * @brief: SIM800L task structure
- * TODO: fields description
- */
-struct sim800l_task
-{
-	int issue;
-	TickType_t timeout;
-	sim800l_cb callback;
-	void *data;
+/* HTTP response (caller must free response/auth with vPortFree) */
+struct sim800l_http_response {
+    char* body;
+    size_t body_length;
+    char* authorization; /* NULL if not requested */
 };
 
-/*
- * @brief: Base SIM800L structure
- * TODO: fields description
- */
-struct sim800l
-{
-	UART_HandleTypeDef *uart;
-	sim800l_hw_init hw_init;
-	GPIO_TypeDef *rst_port;
-	uint16_t rst_pin;
-
-	GPIO_TypeDef *pwr_port;
-	uint16_t pwr_pin;
-	GPIO_TypeDef *pwr_pre_port;
-	uint16_t pwr_pre_pin;
-
-	StreamBufferHandle_t stream;
-	xQueueHandle queue;
-
-	int state;
-	int errors;
-
-	uint8_t txb[SIM800L_BUFFER_SIZE + 1]; // + 1 for additional '\r'
-	uint8_t rxb[SIM800L_BUFFER_SIZE + 1]; // + 1 for additional '\0'
-
-	size_t rxlen;
-
-	TickType_t task_ticks;
-	struct sim800l_task task;
-
-	char apn[SIM800L_APN_SIZE];
-
-	int bcl;
-	int voltage;
+/* Network scan result (single cell) */
+struct sim800l_cell {
+    int32_t mcc;
+    int32_t mnc;
+    int32_t lac;
+    int32_t cid;
+    int32_t level; /* dBm */
 };
 
-/*
- * @brief: Voltage measurement request structure
- * TODO: fields description
- */
-struct sim800l_voltage
-{
-	int voltage;
+#define SIM800L_NETSCAN_MAX_CELLS 8
 
-	void *context;
+/* Network scan results */
+struct sim800l_netscan_result {
+    struct sim800l_cell cells[SIM800L_NETSCAN_MAX_CELLS];
+    int count;
 };
 
-/*
- * @brief: HTTP-request structure
- * TODO: fields description
- */
-struct sim800l_http
-{
-	char *url;
-	char *request;
-	char *response;
-	size_t rlen;
+struct sim800l {
+    UART_HandleTypeDef* uart;
+    StreamBufferHandle_t stream;
 
-	char *req_auth;
-	char *res_auth;
-	bool res_auth_get;
+    char tx_buffer[SIM800L_BUFFER_SIZE + 2]; /* +\r\n */
+    char rx_buffer[SIM800L_BUFFER_SIZE + 1]; /* +\0 */
+    char* rx_current;
 
-	void *context;
+    size_t rx_length;
+
+    char apn[SIM800L_APN_SIZE];
+    struct logger* logger;
+
+    char dma_buffer[SIM800L_UART_BUFFER_SIZE];
 };
 
-/*
- * @brief: Net scan request structure
- * TODO: fields description
+/**
+ * Initialize the driver (does NOT power on the modem).
  */
-struct sim800l_netscan
-{
-	int32_t mcc;
-	int32_t mnc;
-	int32_t lac;
-	int32_t cid;
-	int32_t lev;
+void sim800l_init(struct sim800l* self,
+                  UART_HandleTypeDef* uart,
+                  const char* apn,
+                  struct logger* logger);
 
-	void *context;
-};
-
-
-/*
- * @brief: struct sim800l handle initialization
- * @param mod: struct sim800l handle
- * @param uart: UART_HandleTypeDef handle that is used for interaction
- * @param hw_init: UART hardware init callback (reinitializes UART + starts DMA RX)
- * @param rst_port: GPIO RESET port
- * @param rst_pin: GPIO RESET pin
- * @param pwr_port: GPIO power enable port (MDM_EN)
- * @param pwr_pin: GPIO power enable pin (MDM_EN)
- * @param pwr_pre_port: GPIO pre-charge power enable port (MDM_EN_PRE)
- * @param pwr_pre_pin: GPIO pre-charge power enable pin (MDM_EN_PRE)
- * @param apn: APN string
+/**
+ * Feed received UART DMA data into the driver.
+ * Call from HAL_UARTEx_RxEventCallback.
  */
-void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		sim800l_hw_init hw_init,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin,
-		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
-		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
-		char *apn);
+void sim800l_irq(struct sim800l* self, size_t length);
 
-/*
- * @brief: Copy data from UART interrupt handler
- * @param mod: struct sim800l handle
- * @param buf: data buffer
- * @param len: data buffer length (in bytes)
+/**
+ * Power on the modem, wait for AT response, disable echo, delete SMS.
+ * Caller must power on hardware before calling this.
+ * @return 0 on success, -1 on failure
  */
-void sim800l_irq(struct sim800l *mod, const char *buf, size_t len);
+int sim800l_startup(struct sim800l* self);
 
-/*
- * @brief: SIM800L task
- * @param mod: struct sim800l handle
+/**
+ * Wait for network registration (CREG 0,1).
+ * @param timeout_ms maximum wait time in ms
+ * @return 0 on success, -1 on timeout
  */
-void sim800l_task(struct sim800l *mod);
+int sim800l_wait_network(struct sim800l* self, uint32_t timeout_ms);
 
-/*
- * @brief: Power on SIM800L (2-stage: EN_PRE then EN)
- * @param mod: struct sim800l handle
+/**
+ * Open GPRS bearer (SAPBR).
+ * @return 0 on success, -1 on failure
  */
-void sim800l_power_on(struct sim800l *mod);
+int sim800l_gprs_open(struct sim800l* self);
 
-/*
- * @brief: Power off SIM800L
- * @param mod: struct sim800l handle
+/**
+ * Close GPRS bearer.
+ * @return 0 on success, -1 on failure
  */
-void sim800l_power_off(struct sim800l *mod);
+int sim800l_gprs_close(struct sim800l* self);
 
-/*
- * @brief: Lock SIM800L in sleep state
- * @param mod: struct sim800l handle
- * @retval: 0 on success, -1 on failure (SIM800L is busy and can not sleep)
+/**
+ * HTTP GET request.
+ * @param url        full URL
+ * @param auth_header  Authorization header value to send (NULL = none)
+ * @param read_auth  if true, parse Authorization from response headers
+ * @param response   output (caller frees body/authorization with vPortFree)
+ * @return HTTP status code (200 = OK), or -1 on failure
  */
-int sim800l_sleep_lock(struct sim800l *mod);
+int sim800l_http_get(struct sim800l* self,
+                     const char* url,
+                     const char* auth_header,
+                     bool read_auth,
+                     struct sim800l_http_response* response);
 
-/*
- * @brief: Unlock SIM800L in sleep state
- * @param mod: struct sim800l handle
+/**
+ * HTTP POST request (Content-Type: application/json).
+ * @param url        full URL
+ * @param auth_header  Authorization header value to send (NULL = none)
+ * @param body       JSON body string
+ * @param response   output (caller frees body/authorization with vPortFree)
+ * @return HTTP status code (200 = OK), or -1 on failure
  */
-void sim800l_sleep_unlock(struct sim800l *mod);
+int sim800l_http_post(struct sim800l* self,
+                      const char* url,
+                      const char* auth_header,
+                      const char* body,
+                      struct sim800l_http_response* response);
 
-/*
- * @brief: Add voltage measurement request to SIM800L task queue
- * @param data: Request parameters
- * @param callback: User callback after successful measurement or timeout
- * @param timeout: Timeout in ms
- * @retval: 0 on success, -1 on failure
+/**
+ * HTTP POST request with binary body (Content-Type: application/octet-stream).
+ * @param url        full URL
+ * @param auth_header  Authorization header value to send (NULL = none)
+ * @param body       binary body (may contain NUL bytes)
+ * @param body_len   body length in bytes
+ * @param response   output (caller frees body/authorization with vPortFree)
+ * @return HTTP status code (200 = OK), or -1 on failure
  */
-int sim800l_voltage(struct sim800l *mod, struct sim800l_voltage *data,
-		sim800l_cb callback, timeout_t timeout);
+int sim800l_http_post_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len,
+                          struct sim800l_http_response* response);
 
-/*
- * @brief: Add HTTP request to SIM800L task queue
- * @param mod: struct sim800l handle
- * @param data: Request parameters
- * @param callback: User callback after receiving an HTTP response or timeout
- * @param timeout: Timeout in ms
- * @retval: 0 on success, -1 on failure
+/**
+ * Perform network scan (AT+CNETSCAN).
+ * @param result  output with found cells
+ * @return 0 on success, -1 on failure
  */
-int sim800l_http(struct sim800l *mod, struct sim800l_http *data,
-		sim800l_cb callback, timeout_t timeout);
-
-/*
- * @brief: Add net scan request to SIM800L task queue
- * @param mod: struct sim800l handle
- * @param data: Request parameters
- * @param callback: User callback after receiving every set of net parameters,
- *     net scan done or timeout
- * @param timeout: Timeout in ms
- * @retval: 0 on success, -1 on failure
- */
-int sim800l_netscan(struct sim800l *mod, struct sim800l_netscan *data,
-		sim800l_cb callback, timeout_t timeout);
+int sim800l_netscan(struct sim800l* self,
+                    struct sim800l_netscan_result* result);
 
 #endif /* SIM800L_H_ */

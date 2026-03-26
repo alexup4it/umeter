@@ -8,21 +8,16 @@
 #ifndef APPIFACE_H_
 #define APPIFACE_H_
 
+#include "actual.h"
 #include "params.h"
 
-#include "ptasks.h"
-
-struct appiface
-{
-	volatile uint32_t *timestamp;
-	volatile struct bl_params *bl;
-	struct actual *actual;
-	params_t *params;
-
-	params_t uparams;
+struct appiface {
+    struct actual* actual;
+    params_t uparams;
 };
 
+extern struct appiface appif;
 
-int appiface(void *iface);
+int appiface(void* iface);
 
 #endif /* APPIFACE_H_ */

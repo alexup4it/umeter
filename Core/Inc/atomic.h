@@ -10,15 +10,12 @@
 
 #include "stm32f401xe.h"
 
-
-inline static void atomic_inc(volatile uint32_t *pv)
-{
-	uint32_t value;
-	do
-	{
-		value = __LDREXW(pv);
-		value++;
-	} while(__STREXW(value, pv));
+inline static void atomic_inc(volatile uint32_t* pv) {
+    uint32_t value;
+    do {
+        value = __LDREXW(pv);
+        value++;
+    } while (__STREXW(value, pv));
 }
 
 #endif /* ATOMIC_H_ */

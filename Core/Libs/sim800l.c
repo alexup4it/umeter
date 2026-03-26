@@ -1,8 +1,5 @@
 /*
- * SIM800L library
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
+ * SIM800L driver (synchronous blocking API)
  */
 
 #include "sim800l.h"
@@ -10,1054 +7,773 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "logger.h"
 #include "task.h"
 
-#define MAX_ERRORS 5
-
-#define CMD_BUFFER_SIZE 96
-
-/*
- * Hardware power management replaces AT sleep and RF disable.
- * Modem is powered off completely when idle via MDM_EN/MDM_EN_PRE pins.
- */
-
-#include "logger.h"
-#ifdef LOGGER
 #define TAG "SIM800L"
-extern struct logger logger;
-#endif
 
-enum status
-{
-	STATUS_OK,
-	STATUS_ERROR,
-};
+/******************************************************************************/
+/* Modem log helper: prepend direction char (> for TX, < for RX)             */
+/******************************************************************************/
 
-enum state
-{
-	STATE_STARTUP,
-	STATE_AT,
-	STATE_ECHO_OFF,
-	STATE_DEL_SMS,
-	STATE_IDLE,
-	STATE_CBC,
-	STATE_CREG,
-	STATE_GPRS_INIT,
-	STATE_GPRS_HTTP,
-	STATE_GPRS_HTTP_TERM,
-	STATE_GPRS_DEINIT,
-	STATE_NETSCAN,
-};
+static void log_modem(struct sim800l* self,
+                      enum log_level level,
+                      char dir,
+                      const char* buf,
+                      size_t len) {
+    if (!log_usb_active) {
+        return;
+    }
 
-enum issue
-{
-	ISSUE_IDLE,
-	ISSUE_VOLTAGE,
-	ISSUE_HTTP,
-	ISSUE_NETSCAN,
-};
+    char* tmp = pvPortMalloc(len + 1);
+    if (!tmp) {
+        return;
+    }
 
-
-inline static void task_done(struct sim800l *mod)
-{
-	mod->task.issue = ISSUE_IDLE;
-}
-
-inline static void reset_set(struct sim800l *mod)
-{
-	HAL_GPIO_WritePin(mod->rst_port, mod->rst_pin, GPIO_PIN_RESET);
-}
-
-inline static void reset_unset(struct sim800l *mod)
-{
-	HAL_GPIO_WritePin(mod->rst_port, mod->rst_pin, GPIO_PIN_SET);
+    tmp[0] = dir;
+    memcpy(tmp + 1, buf, len);
+    logger_add(self->logger, level, TAG, true, tmp, len + 1);
+    vPortFree(tmp);
 }
 
 /******************************************************************************/
-void sim800l_init(struct sim800l *mod, UART_HandleTypeDef *uart,
-		sim800l_hw_init hw_init,
-		GPIO_TypeDef *rst_port, uint16_t rst_pin,
-		GPIO_TypeDef *pwr_port, uint16_t pwr_pin,
-		GPIO_TypeDef *pwr_pre_port, uint16_t pwr_pre_pin,
-		char *apn)
-{
-	memset(mod, 0, sizeof(*mod));
-	mod->uart = uart;
-	mod->hw_init = hw_init;
-	mod->rst_port = rst_port;
-	mod->rst_pin = rst_pin;
-	mod->pwr_port = pwr_port;
-	mod->pwr_pin = pwr_pin;
-	mod->pwr_pre_port = pwr_pre_port;
-	mod->pwr_pre_pin = pwr_pre_pin;
-	mod->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
-	mod->queue = xQueueCreate(SIM800L_TASK_QUEUE_SIZE,
-			sizeof(struct sim800l_task));
-
-	strncpy(mod->apn, apn, sizeof(mod->apn) - 1);
-	mod->apn[sizeof(mod->apn) - 1] = '\0';
-
-	reset_set(mod); /* Hold in reset while powered off */
-	sim800l_power_off(mod);
-	task_done(mod);
-}
-
+/* Low-level UART helpers                                                     */
 /******************************************************************************/
-void sim800l_irq(struct sim800l *mod, const char *buf, size_t len)
-{
-	BaseType_t woken = pdFALSE;
-	xStreamBufferSendFromISR(mod->stream, buf, len, &woken);
+
+void sim800l_init(struct sim800l* self,
+                  UART_HandleTypeDef* uart,
+                  const char* apn,
+                  struct logger* logger) {
+    memset(self, 0, sizeof(*self));
+    self->uart   = uart;
+    self->logger = logger;
+    self->stream = xStreamBufferCreate(SIM800L_BUFFER_SIZE, 1);
+
+    strncpy(self->apn, apn, sizeof(self->apn) - 1);
+    self->apn[sizeof(self->apn) - 1] = '\0';
 }
 
-/******************************************************************************/
-void sim800l_power_on(struct sim800l *mod)
-{
-	/* Hold RST low during power-up */
-	reset_set(mod);
-
-	/* 2-stage power enable: pre-charge cap through 120 Ohm, then full */
-	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_SET);
-	osDelay(200); /* Charge 100uF through 120 Ohm (~60ms for 5*tau) */
-	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_SET);
-	osDelay(100);
-
-	/* Reinitialize UART + start DMA RX (pins back to AF mode) */
-	mod->hw_init();
-
-	/* Release RST - module starts booting */
-	reset_unset(mod);
-	osDelay(3000); /* Wait for SIM800L boot */
+void sim800l_irq(struct sim800l* self, size_t length) {
+    BaseType_t woken = pdFALSE;
+    xStreamBufferSendFromISR(self->stream, self->dma_buffer, length, &woken);
+    portYIELD_FROM_ISR(woken);
 }
 
-/******************************************************************************/
-void sim800l_power_off(struct sim800l *mod)
-{
-	reset_set(mod); /* Hold in reset */
-
-	/* Deinit UART to release pins (no parasitic power via TX/RX) */
-	HAL_UART_DeInit(mod->uart);
-
-	HAL_GPIO_WritePin(mod->pwr_port, mod->pwr_pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(mod->pwr_pre_port, mod->pwr_pre_pin, GPIO_PIN_RESET);
+static void clear_rx(struct sim800l* self) {
+    taskENTER_CRITICAL();
+    xStreamBufferReset(self->stream);
+    taskEXIT_CRITICAL();
+    self->rx_length    = 0;
+    self->rx_current   = self->rx_buffer;
+    self->rx_buffer[0] = '\0';
 }
 
-inline static void clear_rx_buffer(struct sim800l *mod)
-{
-	xStreamBufferReset(mod->stream);
-	mod->rxlen = 0;
+static void transmit_raw(struct sim800l* self,
+                         const char* data,
+                         size_t length) {
+    if (length > SIM800L_BUFFER_SIZE) {
+        length = SIM800L_BUFFER_SIZE;
+    }
+
+    memcpy(self->tx_buffer, data, length);
+    log_modem(self, LOG_INFO, '>', data, length);
+
+    while (
+        HAL_UART_Transmit_DMA(self->uart, (uint8_t*)self->tx_buffer, length) ==
+        HAL_BUSY
+    );
 }
 
-static bool wait_for_any(struct sim800l *mod, timeout_t timeout)
-{
-	size_t received;
+static void transmit(struct sim800l* self, const char* data) {
+    size_t length = strlen(data);
+    if (length > SIM800L_BUFFER_SIZE) {
+        length = SIM800L_BUFFER_SIZE;
+    }
 
-	if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-		return false;
+    memcpy(self->tx_buffer, data, length);
+    self->tx_buffer[length]     = '\r';
+    self->tx_buffer[length + 1] = '\n';
+    length += 2;
 
-	received = xStreamBufferReceive(mod->stream, &mod->rxb[mod->rxlen],
-			SIM800L_BUFFER_SIZE - mod->rxlen, pdMS_TO_TICKS(timeout));
-	mod->rxlen += received;
+    log_modem(self, LOG_INFO, '>', (char*)self->tx_buffer, length);
 
-	if (!received)
-		return false;
-
-#ifdef LOGGER
-	logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
-#endif
-
-	return true;
+    clear_rx(self);
+    while (
+        HAL_UART_Transmit_DMA(self->uart, (uint8_t*)self->tx_buffer, length) ==
+        HAL_BUSY
+    );
 }
 
 /**
- * Wait until the specified substring appears in the receive buffer.
- * Does NOT clear the buffer — caller or next transmit handles that.
- * @return true if substring found within timeout, false on timeout
+ * Receive more data from stream buffer into rx_buffer.
+ * @return true if data was received, false on buffer full or timeout
  */
-static bool wait_for(struct sim800l *mod, const char *substr,
-		timeout_t timeout)
-{
-	TickType_t start = xTaskGetTickCount();
-	TickType_t limit = pdMS_TO_TICKS(timeout);
-	TickType_t elapsed;
-	TickType_t left;
+static bool poll_rx(struct sim800l* self, TickType_t remaining_ticks) {
+    if (self->rx_length >= SIM800L_BUFFER_SIZE) {
+        return false;
+    }
 
-	for (;;)
-	{
-		mod->rxb[mod->rxlen] = '\0';
-		if (strstr((char *) mod->rxb, substr))
-		{
-#ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
-#endif
-			return true;
-		}
+    uint8_t* dest = (uint8_t*)self->rx_buffer + self->rx_length;
+    size_t received =
+        xStreamBufferReceive(self->stream,
+                             dest,
+                             SIM800L_BUFFER_SIZE - self->rx_length,
+                             remaining_ticks);
+    self->rx_length += received;
+    self->rx_buffer[self->rx_length] = '\0';
 
-		elapsed = xTaskGetTickCount() - start;
-		if (elapsed >= limit)
-			break;
-		left = limit - elapsed;
+    if (received) {
+        log_modem(self, LOG_INFO, '<', (char*)dest, received);
+    }
 
-		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-			break;
-
-		mod->rxlen += xStreamBufferReceive(mod->stream,
-				&mod->rxb[mod->rxlen],
-				SIM800L_BUFFER_SIZE - mod->rxlen, left);
-	}
-
-#ifdef LOGGER
-	if (mod->rxlen)
-		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
-#endif
-	return false;
+    return received > 0;
 }
 
 /**
- * Wait for OK or ERROR response (whichever comes first).
- * Does NOT clear the buffer.
- * @return true if OK received, false if ERROR or timeout
+ * Wait until substring appears in rx buffer.
+ * if end is NULL, then searches only start
+ * @return pointer next to start, NULL on timeout
  */
-static bool wait_for_ok(struct sim800l *mod, timeout_t timeout)
-{
-	TickType_t start = xTaskGetTickCount();
-	TickType_t limit = pdMS_TO_TICKS(timeout);
-	TickType_t elapsed;
-	TickType_t left;
+static char* read_to(struct sim800l* self,
+                     const uint32_t timeout_ms,
+                     const char* substr) {
+    const TickType_t started_at    = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    char* result                   = NULL;
 
-	for (;;)
-	{
-		mod->rxb[mod->rxlen] = '\0';
+    for (;;) {
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            break;
+        }
 
-		if (strstr((char *) mod->rxb, "OK"))
-		{
-#ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
-#endif
-			return true;
-		}
+        char* found = strstr(self->rx_current, substr);
+        if (found) {
+            found[0] = '\0';
 
-		if (strstr((char *) mod->rxb, "ERROR"))
-		{
-#ifdef LOGGER
-			logger_add(&logger, TAG, false, (char *) mod->rxb,
-					mod->rxlen);
-#endif
-			return false;
-		}
+            result           = self->rx_current;
+            self->rx_current = found + strlen(substr);
+            break;
+        }
 
-		elapsed = xTaskGetTickCount() - start;
-		if (elapsed >= limit)
-			break;
-		left = limit - elapsed;
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
+            break;
+        }
+    }
 
-		if (mod->rxlen >= SIM800L_BUFFER_SIZE)
-			break;
-
-		mod->rxlen += xStreamBufferReceive(mod->stream,
-				&mod->rxb[mod->rxlen],
-				SIM800L_BUFFER_SIZE - mod->rxlen, left);
-	}
-
-#ifdef LOGGER
-	if (mod->rxlen)
-		logger_add(&logger, TAG, false, (char *) mod->rxb, mod->rxlen);
-#endif
-	return false;
+    return result;
 }
 
-static void transmit_data(struct sim800l *mod, const uint8_t *buf, size_t len)
-{
-	if (len > SIM800L_BUFFER_SIZE)
-		len = SIM800L_BUFFER_SIZE;
+static char* read_n(struct sim800l* self, const uint32_t timeout_ms, size_t n) {
+    const TickType_t started_at    = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    char* result                   = NULL;
 
-	memcpy(mod->txb, buf, len);
+    for (;;) {
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            break;
+        }
 
-	mod->txb[len] = '\r';
-	mod->txb[len + 1] = '\n';
-	len += 2;
+        size_t available = self->rx_buffer + self->rx_length - self->rx_current;
+        if (available >= n) {
+            result = self->rx_current;
+            self->rx_current += n;
+            break;
+        }
 
-	osDelay(20);
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
+            break;
+        }
+    }
 
-#ifdef LOGGER
-	logger_add(&logger, TAG, false, (char *) mod->txb, len);
-#endif
-
-	clear_rx_buffer(mod);
-	while (HAL_UART_Transmit_DMA(mod->uart, mod->txb, len) == HAL_BUSY);
-}
-
-inline static void transmit(struct sim800l *mod, const char *buf)
-{
-	transmit_data(mod, (const uint8_t *) buf, strlen(buf));
+    return result;
 }
 
 /**
- * Send AT command and wait for OK or ERROR.
- * @return true if OK, false if ERROR or timeout
+ * Wait for OK or ERROR.
+ * @return true if OK, false on ERROR/timeout
  */
-static bool send_cmd(struct sim800l *mod, const char *cmd, timeout_t timeout)
-{
-	transmit(mod, cmd);
-	return wait_for_ok(mod, timeout);
+static bool wait_for_ok(struct sim800l* self, const uint32_t timeout_ms) {
+    const TickType_t started_at    = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    bool found_ok                  = false;
+
+    for (;;) {
+        const TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            break;
+        }
+
+        if (strstr(self->rx_current, "OK")) {
+            found_ok = true;
+            break;
+        }
+
+        if (strstr(self->rx_current, "ERROR")) {
+            break;
+        }
+
+        if (!poll_rx(self, timeout_ticks - elapsed)) {
+            break;
+        }
+    }
+
+    if (!found_ok) {
+        LOG_W(self->logger, TAG, "expect OK");
+    }
+
+    return found_ok;
 }
 
-static void state(struct sim800l *mod, enum state new_state, enum status status)
-{
-	mod->state = new_state;
+void shuft_rx_to_current(struct sim800l* self) {
+    size_t offset    = self->rx_current - self->rx_buffer;
+    size_t remaining = self->rx_length - offset;
 
-	if (status != STATUS_OK)
-	{
-		mod->errors++;
-		if (mod->errors >= MAX_ERRORS)
-		{
-			mod->errors = 0;
-			mod->state = STATE_STARTUP;
-		}
-	}
+    for (size_t i = 0; i < remaining; i++) {
+        self->rx_buffer[i] = self->rx_current[i];
+    }
 
-	// Task timeout
-	if (mod->task.issue != ISSUE_IDLE)
-	{
-		if ((xTaskGetTickCount() - mod->task_ticks) > mod->task.timeout)
-		{
-			mod->task.callback(-1, mod->task.data);
-			task_done(mod);
-
-			mod->state = STATE_STARTUP;
-		}
-	}
+    self->rx_buffer[remaining] = '\0';
+    self->rx_length            = remaining;
+    self->rx_current           = self->rx_buffer;
 }
 
-// "\r\n+CBC: 0,61,3895\r\n\r\nOK\r\n"
-static bool parse_battery_charge(struct sim800l *mod, timeout_t timeout)
-{
-	const char *header = "+CBC:";
-	const char *ending = "OK";
-	char *p, *end;
-
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
-
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
-
-		end = strstr(p, ending);
-		if (!end)
-			continue;
-
-		p = strstr(p, ",");
-		if (!p)
-			return false;
-
-		p++;
-		if (!*p)
-			return false;
-
-		mod->bcl = strtoul(p, &p, 0);
-		if (!*p)
-			return false;
-
-		p++;
-		if (!*p)
-			return false;
-
-		mod->voltage = strtoul(p, NULL, 0);
-
-		return true;
-	}
-
-	return false;
-}
-
-// "\r\nOK\r\n\r\n+HTTPACTION: 0,200,293\r\n"
-// "\r\nOK\r\n 1,200,16\r\n" ?
-// @retval: HTTP status code on success or -1 on failure
-static int parse_http_action(struct sim800l *mod, int* len, timeout_t timeout)
-{
-	const char *header = "+HTTPACTION:";
-	const char *ending = "\r\n";
-	char *p, *end;
-	int status;
-
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
-
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
-
-		end = strstr(p, ending);
-		if (!end)
-			continue;
-
-		p = strstr(p, ",");
-		if (!p)
-			return -1;
-
-		p++;
-		if (!*p)
-			return -1;
-
-		status = strtoul(p, &p, 0);
-		if (!*p)
-			return -1;
-
-		p++;
-		if (!*p)
-			return -1;
-
-		if (len)
-			*len = strtoul(p, NULL, 0);
-
-		return status;
-	}
-
-	return -1;
-}
-
-// \r\n+HTTPHEAD: 224
-// \r\nhttp/1.1 200 ok
-// \r\nserver: nginx/1.18.0 (ubuntu)
-// \r\ndate: mon, 06 jan 2025 11:42:37 gmt
-// \r\ncontent-type: application/json
-// \r\ncontent-length: 32
-// \r\nconnection: keep-alive
-// \r\nauthorization: 93bsl2iertjhmgypran0jhssj3lxke66shih2qx4hqg=
-// \r\n\r\n\r\nOK\r\n
-// @retval: "Authorization" token length on success or -1 on failure
-static int parse_http_head_auth(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_http *data = mod->task.data;
-	const char *header = "authorization:";
-	const char *ending = "\r\n";
-	char *p, *end;
-	int len;
-
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
-
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
-
-		end = strstr(p, ending);
-		if (!end)
-			continue;
-
-		p = strstr(p, " ");
-		if (!p)
-			return -1;
-
-		p++;
-		if (!*p)
-			return -1;
-
-		if (p >= end)
-			return -1;
-
-		len = end - p;
-		data->res_auth = pvPortMalloc(len + 1);
-		if (!data->res_auth)
-			return -1;
-
-		memcpy(data->res_auth, p, len);
-		data->res_auth[len] = '\0';
-
-		return len;
-	}
-
-	return -1;
-}
-
-// \r\n+HTTPREAD: 293\r\n...\r\nOK\r\n
-// @retval: Payload length on success or -1 on failure
-static int parse_http_read(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_http *data = mod->task.data;
-	const char *header = "+HTTPREAD:";
-	const char *ending = "\r\n"; // To be sure len is valid
-	char *p, *end;
-	int len;
-
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
-
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
-
-		end = strstr(p, ending);
-		if (!end)
-			continue;
-
-		p = strstr(p, " ");
-		if (!p)
-			return -1;
-
-		p++;
-		if (!*p)
-			return -1;
-
-		len = strtoul(p, &p, 0);
-		if (!*p)
-			return -1;
-
-		p = end + strlen(ending);
-		end = (char *) &mod->rxb[mod->rxlen];
-		if (p > end)
-			continue;
-
-		if ((end - p) < len)
-			continue;
-
-		data->response = pvPortMalloc(len + 1);
-		if (!data->response)
-			return -1;
-
-		memcpy(data->response, p, len);
-		data->response[len] = '\0';
-		data->rlen = len;
-
-		return len;
-	}
-
-	return -1;
-}
-
-// \r\n+HTTPSTATUS: POST,0,0,0\r\n\r\nOK\r\n
-// \r\nOK\r\n\r\n+HTTPSTATUS: GET,0,0,0\r\n\r\nOK\r\n
-// @retval: HTTP status on success or -1 on failure
-static int parse_http_status(struct sim800l *mod, timeout_t timeout)
-{
-	const char *header = "+HTTPSTATUS:";
-	const char *ending = "\r\nOK\r\n";
-	char *p, *end;
-	int status;
-
-	while (wait_for_any(mod, timeout))
-	{
-		mod->rxb[mod->rxlen] = '\0';
-
-		p = strstr((char *) mod->rxb, header);
-		if (!p)
-			continue;
-
-		end = strstr(p, ending);
-		if (!end)
-			continue;
-
-		p = strstr(p, ",");
-		if (!p)
-			return -1;
-
-		p++;
-		if (!*p)
-			return -1;
-
-		status = strtoul(p, NULL, 0);
-
-		return status;
-	}
-
-	return -1;
-}
-
-static int32_t get_param_value(const char *line, const char *param, int base)
-{
-	char *p = strstr(line, param);
-	if (!p)
-		return -1;
-
-	p += strlen(param);
-	if (!*p)
-		return -1;
-
-	p++; // ':'
-	if (!*p)
-		return -1;
-
-	return strtoul(p, NULL, base);
-}
-
-static void shift_buffer_left(struct sim800l *mod, size_t len)
-{
-	uint8_t *p = mod->rxb + len;
-
-	for (size_t i = 0; i < mod->rxlen - len; i++)
-		mod->rxb[i] = p[i];
-	mod->rxlen -= len;
-}
-
-static int parse_net_scan(struct sim800l *mod, timeout_t timeout)
-{
-	struct sim800l_netscan *data = mod->task.data;
-	const char *ending = "OK\r\n";
-	const char *delim = "\r\n";
-	size_t len;
-	char *p;
-
-	while (wait_for_any(mod, timeout))
-	{
-		for (;;)
-		{
-			mod->rxb[mod->rxlen] = '\0';
-
-			p = strstr((char *) mod->rxb, delim);
-			if (!p)
-				break; /* for */
-
-			p += strlen(delim);
-			len = p - (char *) mod->rxb;
-
-			if (!strncmp((char *) mod->rxb, ending, strlen(ending)))
-			{
-				mod->task.callback(SIM800L_NETSCAN_DONE, mod->task.data);
-				return 0;
-			}
-
-			// "\r\n" only
-			if (len == strlen(delim))
-			{
-				shift_buffer_left(mod, len);
-				continue; /* for */
-			}
-
-			// Parameters line
-			mod->rxb[len - 1] = '\0';
-
-			// Parameters
-			data->mcc = get_param_value((char *) mod->rxb, "MCC", 10);
-			data->mnc = get_param_value((char *) mod->rxb, "MNC", 10);
-			data->lac = get_param_value((char *) mod->rxb, "Lac", 16);
-			data->cid = get_param_value((char *) mod->rxb, "Cellid", 16);
-			data->lev = get_param_value((char *) mod->rxb, "Rxlev", 10);
-
-			if (data->mcc >= 0 && data->mnc >= 0 && data->lac >= 0 &&
-					data->cid >= 0 && data->lev >= 0)
-			{
-				data->lev = data->lev - 113;
-				mod->task.callback(0, mod->task.data);
-			}
-
-			// <--
-			shift_buffer_left(mod, len);
-		}
-	}
-
-	return -1;
-}
-
-inline static void upd_voltage_data(struct sim800l *mod)
-{
-	struct sim800l_voltage *data = mod->task.data;
-	data->voltage = mod->voltage;
-}
-
-inline static char *get_http_url(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->url;
-}
-
-static int get_http_method(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	if (!data->request)
-		return 0; /* GET */
-	else
-		return 1; /* POST */
-}
-
-inline static size_t get_http_request_len(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	if (!data->request)
-		return 0;
-	return strlen(data->request);
-}
-
-inline static char *get_http_request(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->request;
-}
-
-inline static char *get_http_req_auth(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->req_auth;
-}
-
-inline static bool get_http_res_auth_get(struct sim800l *mod)
-{
-	struct sim800l_http *data = mod->task.data;
-	return data->res_auth_get;
+/**
+ * Send AT command and wait for OK/ERROR.
+ * @return true if OK, false otherwise
+ */
+static bool send_command(struct sim800l* self,
+                         const char* command,
+                         uint32_t timeout_ms) {
+    transmit(self, command);
+    return wait_for_ok(self, timeout_ms);
 }
 
 /******************************************************************************/
-void sim800l_task(struct sim800l *mod)
-{
-	char cmd[CMD_BUFFER_SIZE];
-	TickType_t ticks;
-	bool done;
+/* Startup / shutdown                                                         */
+/******************************************************************************/
 
-	for (;;)
-	{
-		switch ((enum state) mod->state)
-		{
-		case STATE_STARTUP:
-			sim800l_power_on(mod);
-			mod->errors = 0;
-			state(mod, STATE_AT, STATUS_OK);
-			break;
+int sim800l_startup(struct sim800l* self) {
+    /* Wait for AT response */
+    TickType_t started_at = xTaskGetTickCount();
+    bool at_ok            = false;
+    bool echo             = false;
 
-		case STATE_AT:
-			ticks = xTaskGetTickCount();
-			done = false;
+    while ((xTaskGetTickCount() - started_at) < pdMS_TO_TICKS(2000)) {
+        transmit(self, "AT");
+        if (wait_for_ok(self, 500)) {
+            if (strstr((char*)self->rx_buffer, "AT")) {
+                echo = true;
+            }
+            at_ok = true;
+            break;
+        }
+    }
 
-			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(2000))
-			{
-				transmit(mod, "AT");
-				if (wait_for(mod, "OK", 500))
-				{
-					if (strstr((char *) mod->rxb, "AT"))
-						state(mod, STATE_ECHO_OFF, STATUS_OK);
-					else
-						state(mod, STATE_DEL_SMS, STATUS_OK);
-					done = true;
-					break;
-				}
-			}
-			if (!done)
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-			break;
+    if (!at_ok) {
+        return -1;
+    }
 
-		case STATE_ECHO_OFF:
-			if (!send_cmd(mod, "ATE0", 500) ||
-					!send_cmd(mod, "AT&W", 500))
-			{
-				state(mod, STATE_STARTUP, STATUS_ERROR);
-				break;
-			}
-			state(mod, STATE_DEL_SMS, STATUS_OK);
-			break;
+    /* Disable echo if present */
+    if (echo) {
+        if (!send_command(self, "ATE0", 500) ||
+            !send_command(self, "AT&W", 500)) {
+            return -1;
+        }
+    }
 
-		case STATE_DEL_SMS:
-			send_cmd(mod, "AT+CMGDA=6", 5000);
-			state(mod, STATE_IDLE, STATUS_OK);
-			break;
+    /* Delete all SMS */
+    send_command(self, "AT+CMGDA=6", 5000);
 
-		case STATE_IDLE:
-			if (mod->task.issue == ISSUE_IDLE)
-			{
-				if (uxQueueMessagesWaiting(mod->queue))
-				{
-					xQueueReceive(mod->queue, &mod->task, 0);
-					mod->task_ticks = xTaskGetTickCount();
-				}
-				else
-				{
-#ifdef LOGGER
-					logger_add_str(&logger, TAG, false, "power off...");
-#endif
-					sim800l_power_off(mod);
-					xQueueReceive(mod->queue, &mod->task, portMAX_DELAY);
-					mod->task_ticks = xTaskGetTickCount();
-					state(mod, STATE_STARTUP, STATUS_OK);
-					break;
-				}
-			}
+    return 0;
+}
 
-			switch ((enum issue) mod->task.issue)
-			{
-			case ISSUE_VOLTAGE:
-				state(mod, STATE_CBC, STATUS_OK);
-				break;
-			case ISSUE_HTTP:
-			case ISSUE_NETSCAN:
-				state(mod, STATE_CREG, STATUS_OK);
-				break;
-			default:
-				osDelay(1);
-				break;
-			}
-			break;
+int sim800l_wait_network(struct sim800l* self, uint32_t timeout_ms) {
+    const TickType_t started_at = xTaskGetTickCount();
 
-		case STATE_CBC:
-			transmit(mod, "AT+CBC");
-			if (parse_battery_charge(mod, 500))
-			{
-				upd_voltage_data(mod);
-				mod->task.callback(0, mod->task.data);
-				task_done(mod);
-				state(mod, STATE_IDLE, STATUS_OK);
-			}
-			else
-			{
-				state(mod, STATE_CBC, STATUS_ERROR);
-			}
-			break;
+    while ((xTaskGetTickCount() - started_at) < pdMS_TO_TICKS(timeout_ms)) {
+        transmit(self, "AT+CREG?");
+        if (read_to(self, 5000, "+CREG: 0,1")) {
+            return 0;
+        }
+        osDelay(pdMS_TO_TICKS(1000));
+    }
 
-		case STATE_CREG:
-			ticks = xTaskGetTickCount();
-			done = false;
-
-			while ((xTaskGetTickCount() - ticks) < pdMS_TO_TICKS(30000))
-			{
-				transmit(mod, "AT+CREG?");
-				if (wait_for(mod, "+CREG: 0,1", 5000))
-				{
-					done = true;
-					break;
-				}
-				osDelay(1000);
-			}
-			if (!done)
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			if (mod->task.issue == ISSUE_NETSCAN)
-				state(mod, STATE_NETSCAN, STATUS_OK);
-			else
-				state(mod, STATE_GPRS_INIT, STATUS_OK);
-			break;
-
-		case STATE_GPRS_INIT:
-			if (!send_cmd(mod, "AT+SAPBR=3,1,CONTYPE,GPRS", 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			strcpy(cmd, "AT+SAPBR=3,1,APN,");
-			strcat(cmd, mod->apn);
-			if (!send_cmd(mod, cmd, 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			if (!send_cmd(mod, "AT+SAPBR=1,1", 20000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			transmit(mod, "AT+SAPBR=2,1");
-			if (!wait_for(mod, "+SAPBR: 1,1", 20000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			state(mod, STATE_GPRS_HTTP, STATUS_OK);
-			break;
-
-		case STATE_GPRS_HTTP:
-			if (!send_cmd(mod, "AT+HTTPINIT", 2000) ||
-					!send_cmd(mod, "AT+HTTPPARA=CID,1", 2000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			strcpy(cmd, "AT+HTTPPARA=URL,");
-			strcat(cmd, get_http_url(mod));
-			if (!send_cmd(mod, cmd, 2000))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			// SSL does not work
-			// \r\nOK\r\n\r\n+HTTPACTION: 0,606,0\r\n
-
-			if (get_http_req_auth(mod))
-			{
-				strcpy(cmd, "AT+HTTPPARA=USERDATA,Authorization: ");
-				strcat(cmd, get_http_req_auth(mod));
-				if (!send_cmd(mod, cmd, 2000))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-			}
-
-			if (get_http_method(mod))
-			{
-				if (!send_cmd(mod,
-						"AT+HTTPPARA=CONTENT,application/json", 500))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-
-				strcpy(cmd, "AT+HTTPDATA=");
-				utoa(get_http_request_len(mod), &cmd[strlen(cmd)], 10);
-				strcat(cmd, ",1000");
-				transmit(mod, cmd);
-				if (!wait_for(mod, "DOWNLOAD", 1000))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-
-				if (!send_cmd(mod, get_http_request(mod), 500))
-				{
-					state(mod, STATE_IDLE, STATUS_ERROR);
-					break;
-				}
-			}
-
-			strcpy(cmd, "AT+HTTPACTION=");
-			strcat(cmd, get_http_method(mod) ? "1" : "0");
-			transmit(mod, cmd);
-			if (parse_http_action(mod, NULL, 30000) != 200)
-			{
-				state(mod, STATE_GPRS_HTTP_TERM, STATUS_ERROR);
-				break;
-			}
-
-			if (get_http_res_auth_get(mod))
-			{
-				transmit(mod, "AT+HTTPHEAD");
-				parse_http_head_auth(mod, 1000);
-			}
-
-			transmit(mod, "AT+HTTPREAD");
-			if (parse_http_read(mod, 1000) > 0)
-			{
-				mod->task.callback(0, mod->task.data);
-				task_done(mod);
-			}
-
-			state(mod, STATE_GPRS_HTTP_TERM, STATUS_OK);
-			break;
-
-		case STATE_GPRS_HTTP_TERM:
-			transmit(mod, "AT+HTTPSTATUS?");
-			if (parse_http_status(mod, 500))
-			{
-				state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
-				break;
-			}
-
-			if (!send_cmd(mod, "AT+HTTPTERM", 2000))
-			{
-				state(mod, STATE_GPRS_DEINIT, STATUS_ERROR);
-				break;
-			}
-
-			// Continue to send HTTP while connected
-			if (mod->task.issue == ISSUE_IDLE)
-			{
-				if (xQueueReceive(mod->queue, &mod->task, pdMS_TO_TICKS(50)))
-				{
-					mod->task_ticks = xTaskGetTickCount();
-					if (mod->task.issue == ISSUE_HTTP)
-					{
-						state(mod, STATE_GPRS_HTTP, STATUS_OK);
-						break;
-					}
-				}
-			}
-
-			state(mod, STATE_GPRS_DEINIT, STATUS_OK);
-			break;
-
-		case STATE_GPRS_DEINIT:
-			if (send_cmd(mod, "AT+SAPBR=0,1", 10000))
-				state(mod, STATE_IDLE, STATUS_OK);
-			else
-				state(mod, STATE_IDLE, STATUS_ERROR);
-			break;
-
-		case STATE_NETSCAN:
-			if (!send_cmd(mod, "AT+CNETSCAN=1", 500))
-			{
-				state(mod, STATE_IDLE, STATUS_ERROR);
-				break;
-			}
-
-			transmit(mod, "AT+CNETSCAN");
-			if (!parse_net_scan(mod, 45000))
-			{
-				task_done(mod);
-				state(mod, STATE_IDLE, STATUS_OK);
-			}
-			break;
-		}
-	}
+    return -1;
 }
 
 /******************************************************************************/
-int sim800l_voltage(struct sim800l *mod, struct sim800l_voltage *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+/* GPRS bearer                                                                */
+/******************************************************************************/
 
-	task.issue = ISSUE_VOLTAGE;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+int sim800l_gprs_open(struct sim800l* self) {
+    char cmd[96];
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    if (!send_command(self, "AT+SAPBR=3,1,CONTYPE,GPRS", 500)) {
+        return -1;
+    }
 
-	if (status == pdTRUE)
-		return 0;
+    strcpy(cmd, "AT+SAPBR=3,1,APN,");
+    strcat(cmd, self->apn);
+    if (!send_command(self, cmd, 500)) {
+        return -1;
+    }
 
-	return -1;
+    if (!send_command(self, "AT+SAPBR=1,1", 20000)) {
+        return -1;
+    }
+
+    transmit(self, "AT+SAPBR=2,1");
+    if (!read_to(self, 20000, "+SAPBR: 1,1")) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int sim800l_gprs_close(struct sim800l* self) {
+    send_command(self, "AT+SAPBR=0,1", 10000);
+    return 0;
 }
 
 /******************************************************************************/
-int sim800l_http(struct sim800l *mod, struct sim800l_http *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+/* HTTP response parsers                                                      */
+/******************************************************************************/
 
-	data->response = NULL;
-	data->res_auth = NULL;
+/* Parse +HTTPACTION: <method>,<status>,<datalen>
+ * Returns HTTP status code or -1 on failure. Writes datalen to *out_length. */
+static int parse_http_action(struct sim800l* self,
+                             int* data_length,
+                             uint32_t timeout_ms) {
+    read_to(self, timeout_ms, "+HTTPACTION: ");
+    char* p = read_to(self, timeout_ms, "\r\n");
 
-	task.issue = ISSUE_HTTP;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+    if (!p) {
+        return -1;
+    }
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    p = strstr(p, ",");
+    if (!p || !*(++p)) {
+        return -1;
+    }
 
-	if (status == pdTRUE)
-		return 0;
+    int status = (int)strtoul(p, &p, 10);
+    if (*p != ',' || !*(++p)) {
+        return -1;
+    }
 
-	return -1;
+    if (data_length) {
+        *data_length = (int)strtoul(p, NULL, 10);
+    }
+
+    return status;
+}
+
+/* Parse Authorization header from HTTPHEAD response.
+ * Returns allocated string or NULL. */
+static char* parse_http_head_authorization(struct sim800l* self,
+                                           uint32_t timeout_ms) {
+    read_to(self, timeout_ms, "authorization: ");
+    char* p = read_to(self, timeout_ms, "\r\n");
+    if (!p) {
+        return NULL;
+    }
+
+    size_t length = strlen(p) + 1;
+    char* result  = pvPortMalloc(length);
+    if (!result) {
+        return NULL;
+    }
+
+    memcpy(result, p, length);
+    return result;
+}
+
+/* Parse HTTPREAD response body.
+ * Returns allocated body and sets *out_length, or NULL on failure.
+ *
+ * +HTTPREAD: <data_len>\r\n<data>\r\nOK\r\n
+ *
+ * Streams body data directly into the allocated buffer to support responses
+ * larger than SIM800L_BUFFER_SIZE.
+ */
+static char* parse_http_read(struct sim800l* self,
+                             size_t* out_length,
+                             uint32_t timeout_ms) {
+    const TickType_t started_at    = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+
+    read_to(self, timeout_ms, "+HTTPREAD: ");
+    char* p = read_to(self, timeout_ms, "\r\n");
+
+    if (!p) {
+        return NULL;
+    }
+
+    size_t length = (size_t)strtoul(p, NULL, 10);
+    if (length == 0) {
+        return NULL;
+    }
+
+    char* body = pvPortMalloc(length + 1);
+    if (!body) {
+        return NULL;
+    }
+
+    size_t copied = 0;
+
+    /* Copy any body bytes already sitting in rx_buffer */
+    size_t buffered = self->rx_buffer + self->rx_length - self->rx_current;
+    if (buffered > 0) {
+        if (buffered > length) {
+            buffered = length;
+        }
+        memcpy(body, self->rx_current, buffered);
+        self->rx_current += buffered;
+        copied = buffered;
+    }
+
+    /* Stream remaining bytes directly from the stream buffer */
+    while (copied < length) {
+        TickType_t elapsed = xTaskGetTickCount() - started_at;
+        if (elapsed >= timeout_ticks) {
+            vPortFree(body);
+            return NULL;
+        }
+
+        size_t received = xStreamBufferReceive(self->stream,
+                                               (uint8_t*)body + copied,
+                                               length - copied,
+                                               timeout_ticks - elapsed);
+        if (received == 0) {
+            vPortFree(body);
+            return NULL;
+        }
+        copied += received;
+    }
+
+    body[length] = '\0';
+    *out_length  = length;
+
+    /* Consume trailing \r\nOK\r\n so it doesn't leak into the next command.
+     * Some of it may already be in rx_buffer (small responses arrive in one
+     * burst), so shift remaining data instead of resetting. */
+    shuft_rx_to_current(self);
+    wait_for_ok(self, timeout_ms);
+
+    return body;
 }
 
 /******************************************************************************/
-int sim800l_netscan(struct sim800l *mod, struct sim800l_netscan *data,
-		sim800l_cb callback, timeout_t timeout)
-{
-	struct sim800l_task task;
-	BaseType_t status;
+/* HTTP session (internal)                                                    */
+/******************************************************************************/
 
-	task.issue = ISSUE_NETSCAN;
-	task.timeout = pdMS_TO_TICKS(timeout);
-	task.callback = callback;
-	task.data = data;
+static int http_setup_common(struct sim800l* self,
+                             const char* url,
+                             const char* auth_header) {
+    char cmd[96];
 
-	status = xQueueSendToBack(mod->queue, &task, 0);
+    strcpy(cmd, "AT+HTTPPARA=URL,");
+    strcat(cmd, url);
+    if (!send_command(self, cmd, 2000)) {
+        return -1;
+    }
 
-	if (status == pdTRUE)
-		return 0;
+    if (auth_header) {
+        strcpy(cmd, "AT+HTTPPARA=USERDATA,Authorization: ");
+        strcat(cmd, auth_header);
+        if (!send_command(self, cmd, 2000)) {
+            return -1;
+        }
+    }
 
-	return -1;
+    return 0;
+}
+
+static int http_upload_body(struct sim800l* self,
+                            const char* content_type,
+                            const void* body,
+                            size_t body_len) {
+    char cmd[96];
+
+    strcpy(cmd, "AT+HTTPPARA=CONTENT,");
+    strcat(cmd, content_type);
+    if (!send_command(self, cmd, 500)) {
+        return -1;
+    }
+
+    strcpy(cmd, "AT+HTTPDATA=");
+    utoa(body_len, &cmd[strlen(cmd)], 10);
+    strcat(cmd, ",5000");
+    transmit(self, cmd);
+    if (!read_to(self, 1000, "DOWNLOAD")) {
+        return -1;
+    }
+
+    /* Send raw body without \r\n — must match HTTPDATA byte count exactly */
+    clear_rx(self);
+    transmit_raw(self, body, body_len);
+
+    if (!wait_for_ok(self, 5000)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int http_setup(struct sim800l* self,
+                      const char* url,
+                      const char* auth_header,
+                      const char* body) {
+    if (http_setup_common(self, url, auth_header) != 0) {
+        return -1;
+    }
+
+    if (body) {
+        return http_upload_body(self, "application/json", body, strlen(body));
+    }
+
+    return 0;
+}
+
+static int http_setup_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len) {
+    if (http_setup_common(self, url, auth_header) != 0) {
+        return -1;
+    }
+
+    if (body && body_len > 0) {
+        return http_upload_body(self,
+                                "application/octet-stream",
+                                body,
+                                body_len);
+    }
+
+    return 0;
+}
+
+/**
+ * Drain leftover modem data from the stream buffer and reset rx state.
+ * Used after a failed HTTPREAD to prevent HTTPTERM from being sent while the
+ * modem is still dumping binary data, which would corrupt the session.
+ */
+static void drain_and_reset(struct sim800l* self) {
+    uint8_t drain[128];
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(2000);
+
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(now - deadline) >= 0) {
+            break;
+        }
+        size_t n = xStreamBufferReceive(self->stream,
+                                        drain,
+                                        sizeof(drain),
+                                        pdMS_TO_TICKS(200));
+        if (n == 0) {
+            break; /* stream idle for 200 ms — safe to proceed */
+        }
+    }
+
+    self->rx_length    = 0;
+    self->rx_current   = self->rx_buffer;
+    self->rx_buffer[0] = '\0';
+}
+
+static int http_execute(struct sim800l* self,
+                        const char* url,
+                        const char* auth_header,
+                        const char* body,
+                        bool read_auth,
+                        struct sim800l_http_response* response) {
+    int is_post = (body != NULL);
+    int result  = -1;
+
+    memset(response, 0, sizeof(*response));
+
+    if (!send_command(self, "AT+HTTPINIT", 2000) ||
+        !send_command(self, "AT+HTTPPARA=CID,1", 2000)) {
+        return -1;
+    }
+
+    do {
+        if (http_setup(self, url, auth_header, body) != 0) {
+            break;
+        }
+
+        /* Execute request */
+        transmit(self, is_post ? "AT+HTTPACTION=1" : "AT+HTTPACTION=0");
+        int http_status = parse_http_action(self, NULL, 30000);
+        if (http_status != 200) {
+            break;
+        }
+
+        /* Read authorization header if requested */
+        if (read_auth) {
+            transmit(self, "AT+HTTPHEAD");
+            response->authorization = parse_http_head_authorization(self, 5000);
+        }
+
+        /* Read response body */
+        transmit(self, "AT+HTTPREAD");
+        response->body = parse_http_read(self, &response->body_length, 10000);
+        if (!response->body) {
+            break;
+        }
+        result = 200;
+    } while (0);
+
+    /* Drain any leftover modem data before terminating the HTTP session.
+     * If HTTPREAD failed mid-transfer, the modem may still be dumping binary
+     * data.  Sending HTTPTERM while that data is in flight corrupts the
+     * modem state, so we wait for the stream to go idle first. */
+    if (result != 200) {
+        drain_and_reset(self);
+    }
+
+    /* Terminate HTTP session */
+    send_command(self, "AT+HTTPTERM", 2000);
+
+    return result;
+}
+
+/******************************************************************************/
+/* Public HTTP API                                                            */
+/******************************************************************************/
+
+int sim800l_http_get(struct sim800l* self,
+                     const char* url,
+                     const char* auth_header,
+                     bool read_auth,
+                     struct sim800l_http_response* response) {
+    return http_execute(self, url, auth_header, NULL, read_auth, response);
+}
+
+int sim800l_http_post(struct sim800l* self,
+                      const char* url,
+                      const char* auth_header,
+                      const char* body,
+                      struct sim800l_http_response* response) {
+    return http_execute(self, url, auth_header, body, false, response);
+}
+
+int sim800l_http_post_bin(struct sim800l* self,
+                          const char* url,
+                          const char* auth_header,
+                          const void* body,
+                          size_t body_len,
+                          struct sim800l_http_response* response) {
+    int result = -1;
+
+    memset(response, 0, sizeof(*response));
+
+    if (!send_command(self, "AT+HTTPINIT", 2000) ||
+        !send_command(self, "AT+HTTPPARA=CID,1", 2000)) {
+        return -1;
+    }
+
+    do {
+        if (http_setup_bin(self, url, auth_header, body, body_len) != 0) {
+            break;
+        }
+
+        /* Execute POST */
+        transmit(self, "AT+HTTPACTION=1");
+        int http_status = parse_http_action(self, NULL, 30000);
+        if (http_status != 200) {
+            break;
+        }
+
+        /* Read response body */
+        transmit(self, "AT+HTTPREAD");
+        response->body = parse_http_read(self, &response->body_length, 10000);
+        if (!response->body) {
+            break;
+        }
+        result = 200;
+    } while (0);
+
+    /* Drain any leftover modem data before terminating the HTTP session. */
+    if (result != 200) {
+        drain_and_reset(self);
+    }
+
+    /* Terminate HTTP session */
+    send_command(self, "AT+HTTPTERM", 2000);
+
+    return result;
+}
+
+/******************************************************************************/
+/* Network scan                                                               */
+/******************************************************************************/
+
+static int32_t get_param_value(const char* line, const char* param, int base) {
+    const char* p = line;
+
+    while (*p) {
+        p = strstr(p, param);
+        if (!p) {
+            return -1;
+        }
+        p += strlen(param);
+
+        if (*p == ':') {
+            p++;
+            break;
+        }
+    }
+
+    if (!*p) {
+        return -1;
+    }
+
+    return (int32_t)strtoul(p, NULL, base);
+}
+
+int sim800l_netscan(struct sim800l* self,
+                    struct sim800l_netscan_result* result) {
+    const TickType_t started_at_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    memset(result, 0, sizeof(*result));
+
+    if (!send_command(self, "AT+CNETSCAN=1", 500)) {
+        return -1;
+    }
+
+    transmit(self, "AT+CNETSCAN");
+
+    for (;;) {
+        char* p = read_to(self, 45000 - started_at_ms, "\r\n");
+
+        if (strcmp(p, "OK") == 0) {
+            return 0;
+        }
+
+        if (strlen(p) == 0) {
+            continue;
+        }
+
+        if (result->count < SIM800L_NETSCAN_MAX_CELLS) {
+            struct sim800l_cell* cell = &result->cells[result->count];
+
+            cell->mcc   = get_param_value(p, "MCC", 10);
+            cell->mnc   = get_param_value(p, "MNC", 10);
+            cell->lac   = get_param_value(p, "Lac", 16);
+            cell->cid   = get_param_value(p, "Cellid", 16);
+            cell->level = get_param_value(p, "Rxlev", 10);
+
+            if (cell->mcc >= 0 && cell->mnc >= 0 && cell->lac >= 0 &&
+                cell->cid >= 0 && cell->level >= 0) {
+                cell->level = cell->level - 113;
+                result->count++;
+            }
+        }
+
+        shuft_rx_to_current(self);
+    }
 }

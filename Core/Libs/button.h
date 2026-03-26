@@ -1,28 +1,27 @@
 /*
  * Button
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025-2026
  */
 
 #ifndef BUTTON_H_
 #define BUTTON_H_
 
-#include "stm32f4xx_hal.h"
+#include <stdint.h>
 
-struct button
-{
-	GPIO_TypeDef *port;
-	uint16_t pin;
-	int counter;
-	int state;
+typedef void (*button_callback_t)(void);
 
-	void *callback;
+struct button {
+    button_callback_t callback;
+    uint32_t debounce_ms;
+    uint32_t press_started_at_ms;
+    uint32_t ignore_until_ms;
+    uint8_t is_pressed;
+    uint8_t ignore_active;
 };
 
-
-void button_init(struct button *btn, GPIO_TypeDef *port, uint16_t pin,
-		void *callback);
-void button_task(struct button *btn);
+void button_init(struct button* self,
+                 button_callback_t callback,
+                 uint32_t debounce_ms);
+int button_irq_callback(struct button* self, int is_pressed, uint32_t now_ms);
+void button_dispatch(struct button* self);
 
 #endif /* BUTTON_H_ */

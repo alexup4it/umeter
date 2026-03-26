@@ -1,60 +1,69 @@
 /*
  * Button
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2025
  */
 
 #include "button.h"
 
-#include "cmsis_os.h"
-
 #include <string.h>
 
-#define PERIOD 10
-#define DELAY  200
-
-
-/******************************************************************************/
-void button_init(struct button *btn, GPIO_TypeDef *port, uint16_t pin,
-		void *callback)
-{
-	memset(btn, 0, sizeof(*btn));
-	btn->port = port;
-	btn->pin = pin;
-	btn->counter = 0;
-	btn->state = 0;
-	btn->callback = callback;
+static int time_reached(uint32_t now, uint32_t deadline) {
+    return (int32_t)(now - deadline) >= 0;
 }
 
 /******************************************************************************/
-// TODO: Low power optimization
-// TODO: Several buttons in one task
-void button_task(struct button *btn)
-{
-	void (*callback)(void) = btn->callback;
-	TickType_t wake = xTaskGetTickCount();
-	int state;
+void button_init(struct button* self,
+                 button_callback_t callback,
+                 uint32_t debounce_ms) {
+    memset(self, 0, sizeof(*self));
+    self->callback    = callback;
+    self->debounce_ms = debounce_ms;
+    if (self->debounce_ms == 0) {
+        self->debounce_ms = 1;
+    }
+}
 
-	for (;;)
-	{
-		vTaskDelayUntil(&wake, pdMS_TO_TICKS(PERIOD));
+/******************************************************************************/
+int button_irq_callback(struct button* self, int is_pressed, uint32_t now_ms) {
+    uint32_t held_ms;
 
-		if (btn->counter)
-			btn->counter--;;
+    if (!self) {
+        return 0;
+    }
 
-		if (btn->counter)
-			continue;
+    if (self->ignore_active) {
+        if (!time_reached(now_ms, self->ignore_until_ms)) {
+            return 0;
+        }
+        self->ignore_active = 0;
+    }
 
-		state = ~HAL_GPIO_ReadPin(btn->port, btn->pin) & 0x01;
+    if (is_pressed) {
+        if (!self->is_pressed) {
+            self->is_pressed          = 1;
+            self->press_started_at_ms = now_ms;
+        }
+        return 0;
+    }
 
-		if (btn->state != state)
-		{
-			btn->state = state;
-			btn->counter = DELAY / PERIOD;
+    if (!self->is_pressed) {
+        return 0;
+    }
 
-			if (state)
-				callback();
-		}
-	}
+    self->is_pressed = 0;
+    held_ms          = now_ms - self->press_started_at_ms;
+
+    if (held_ms < self->debounce_ms) {
+        return 0;
+    }
+
+    self->ignore_until_ms = now_ms + self->debounce_ms;
+    self->ignore_active   = 1;
+    return 1;
+}
+
+/******************************************************************************/
+void button_dispatch(struct button* self) {
+    if (self && self->callback) {
+        self->callback();
+    }
 }

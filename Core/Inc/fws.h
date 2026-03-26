@@ -23,43 +23,36 @@
 
 #define FWS_BL_GIT_COMMIT_HASH_LEN 64
 
-
-enum fws_status
-{
-	FWS_STATUS_NO_FW,
-	FWS_STATUS_SUCCESS,
-	FWS_STATUS_ERR_NO_STORAGE,
-	FWS_STATUS_ERR_FW_SIZE,
-	FWS_STATUS_ERR_CHECKSUM_STORAGE,
-	FWS_STATUS_ERR_CHECKSUM_LOADED,
-	FWS_STATUS_ERR_ERASE,
+enum fws_status {
+    FWS_STATUS_NO_FW,
+    FWS_STATUS_SUCCESS,
+    FWS_STATUS_ERR_NO_STORAGE,
+    FWS_STATUS_ERR_FW_SIZE,
+    FWS_STATUS_ERR_CHECKSUM_STORAGE,
+    FWS_STATUS_ERR_CHECKSUM_LOADED,
+    FWS_STATUS_ERR_ERASE,
 };
 
 /**
  * @brief: Firmware header
  * @param loaded: Firmware was already loaded (!= 0) or not (== 0)
- * @param version: Firmware version
  * @param size: Firmware size in bytes
  * @param checksum: Checksum
  * Sum of all firmware data (uint32_t) + FWS_CHECKSUM_INIT
  */
-struct fws
-{
-	uint32_t loaded;
-	uint32_t version;
-	uint32_t size;
-	uint32_t checksum;
+struct fws {
+    uint32_t loaded;
+    uint32_t size;
+    uint32_t checksum;
 };
 
 /**
  * @brief: Bootloader status
  */
-struct bl_params
-{
-	uint32_t status;
-	uint32_t : 32;
-	uint8_t hash[FWS_BL_GIT_COMMIT_HASH_LEN];
+struct bl_params {
+    uint32_t status;
+    uint32_t : 32;
+    uint8_t hash[FWS_BL_GIT_COMMIT_HASH_LEN];
 };
-
 
 #endif /* FWS_H_ */

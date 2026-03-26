@@ -1,6 +1,18 @@
-.settings
-Debug
 Core/Inc/gitcommit.h
 umeter\ Debug.launch
+umeter.launch
 
 .github
+
+cmake-build-*/
+build/
+Debug/
+Release/
+
+cmake/
+
+.osx.project
+
+.idea/
+.settings/
+.mxproject

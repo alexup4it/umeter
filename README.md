@@ -35,10 +35,9 @@ Request JSON:
 |apn|string|APN for cellular network|
 |url_ota|string|OTA server URL|
 |url_app|string|Application server URL|
-|period_app|uint32|Communication with application server period (seconds)|
-|period_sen|uint32|Sensors data update period (seconds)|
-|mtime_count|uint32|Measurement time for counter (seconds)|
-|sens|int32|[Available sensors](#available-sensors) bit mask|
+|period_upload|uint32|Communication with application server period (seconds)|
+|period_sensors|uint32|Sensors data update period (seconds)|
+|period_anemometer|uint32|Measurement time for anemometer (seconds)|
 
 Response JSON:
 |Field|Type|Description|
@@ -67,23 +66,35 @@ Response JSON:
 |status|string|"ok" on success|
 
 ### /api/data
-POST  
-_Every_ `period_app` _seconds_  
-Send device state and sensors information
+POST `Content-Type: application/octet-stream`  
+_Every_ `period_upload` _seconds_  
+Send device state and sensor measurements in compact binary format
 
-Request JSON:
-|Field|Type|Optional|Description|
+Request body is raw binary (little-endian throughout):
+
+**Header (14 bytes)**
+|Offset|Size|Type|Description|
 |-|-|-|-|
-|uid|uint32|Always present|Unique device ID|
-|ts|uint32|Always present|Current datetime (Unix timestamp)|
-|bat|int32|Optional|Battery voltage (mV)|
-|count|string [sensor_base64](#sensor_base64)|Optional|Number of counts per `mtime_count` seconds (average value per `period_sen` seconds)|
-|count_min|string [sensor_base64](#sensor_base64)|Optional|Number of counts per `mtime_count` seconds (minimal value per `period_sen` seconds)|
-|count_max|string [sensor_base64](#sensor_base64)|Optional|Number of counts per `mtime_count` seconds (maximum value per `period_sen` seconds)|
-|temp|string [sensor_base64](#sensor_base64)|Optional|Temperature (0,001 °C)|
-|hum|string [sensor_base64](#sensor_base64)|Optional|Humidity (0,001%)|
-|angle|string [sensor_base64](#sensor_base64)|Optional|Angle (0,001°)|
-|tamper|int32|Optional|Digital input value (0 or 1)|
+|0|4|uint32|Unique device ID|
+|4|4|uint32|Current datetime (Unix timestamp)|
+|8|4|uint32|System uptime (FreeRTOS ticks)|
+|12|1|uint8|Tamper input (0 or 1)|
+|13|1|uint8|Number of sensor records (N)|
+
+**Sensor record (20 bytes each, N records)**
+|Offset|Size|Type|Description|
+|-|-|-|-|
+|0|4|uint32|Measurement datetime (Unix timestamp)|
+|4|2|uint16|Battery voltage (mV)|
+|6|2|int16|Temperature (0.01 °C)|
+|8|2|uint16|Humidity (0.01 %RH)|
+|10|2|uint16|Pressure (0.1 hPa)|
+|12|2|uint16|Wind direction (0.01°)|
+|14|2|uint16|Wind speed average (per `period_anemometer` seconds)|
+|16|2|uint16|Wind speed minimum (per `period_anemometer` seconds)|
+|18|2|uint16|Wind speed maximum (per `period_anemometer` seconds)|
+
+Total payload size: 14 + N × 20 bytes (max N = 50, max payload = 1014 bytes)
 
 Response JSON:
 |Field|Type|Description|
@@ -101,26 +112,21 @@ Response JSON:
 |5|Error: invalid checksum (internal memory)|
 |6|Error: could not erase internal memory|
 
-### Available sensors
-|Bit|Sensor|
-|-|-|
-|0x01 (xxxx xxx1)|Voltage|
-|0x02 (xxxx xx1x)|Counter _(not used)_|
-|0x04 (xxxx x1xx)|TMPx75 _(not used)_|
-|0x08 (xxxx 1xxx)|AHT20|
-|0x10 (xxx1 xxxx)|Distance _(not used)_|
-|0x20 (xx1x xxxx)|AS5600|
-
-### sensor_base64
-Array of data structures in base64 encoding  
-Sensor data structure:
-|Offset|Length|Endian|Description|
-|-|-|-|-|
-|0 bytes|4 bytes|little-endian|Value|
-|4 bytes|4 bytes|little-endian|Measurement datetime (Unix timestamp)|
-
 ## OTA API
 **_?_**
 
 ## Serial API
 **_?_**
+
+## Development setup
+Init submodules:
+```sh
+git submodule init
+git submodule update
+```
+
+Activate git hooks:
+```sh
+sh install-hooks.sh
+```
+
