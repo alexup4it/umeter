@@ -525,8 +525,7 @@ void task_net(void* argument) {
     /* Startup sequence                                                   */
     /* ------------------------------------------------------------------ */
 
-    wait_for_net_event();
-    LOG_I(ctx.logger, TAG, "started");
+    led_blink(5);
 
     /* 1. Get server time */
     for (int attempt = 0; attempt < SEND_RETRIES; attempt++) {

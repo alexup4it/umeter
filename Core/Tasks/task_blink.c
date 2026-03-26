@@ -27,7 +27,7 @@ void task_blink(void* argument) {
             osDelay(pdMS_TO_TICKS(10));
             HAL_GPIO_WritePin(LED_DB_GPIO_Port, LED_DB_Pin, GPIO_PIN_SET);
             if (i < count - 1) {
-                osDelay(pdMS_TO_TICKS(200));
+                osDelay(pdMS_TO_TICKS(300));
             }
         }
     }
