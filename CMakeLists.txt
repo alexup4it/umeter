@@ -69,23 +69,6 @@ add_executable(${PROJECT_NAME}.elf ${SOURCES} ${CMAKE_SOURCE_DIR}/STM32F401CEUX_
 set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
 set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)
 
-# Read version info from params.h and create versioned binary (replaces binname.sh)
-file(STRINGS ${CMAKE_SOURCE_DIR}/Core/Inc/params.h PARAMS_LINES)
-foreach(LINE ${PARAMS_LINES})
-    if(LINE MATCHES "#define[ \t]+PARAMS_DEVICE_NAME[ \t]+([^ \t]+)")
-        string(REPLACE "\"" "" DEVICE_NAME "${CMAKE_MATCH_1}")
-    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B1[ \t]+([0-9]+)")
-        set(FW_B1 "${CMAKE_MATCH_1}")
-    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B2[ \t]+([0-9]+)")
-        set(FW_B2 "${CMAKE_MATCH_1}")
-    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B3[ \t]+([0-9]+)")
-        set(FW_B3 "${CMAKE_MATCH_1}")
-    elseif(LINE MATCHES "#define[ \t]+PARAMS_FW_B4[ \t]+([0-9]+)")
-        set(FW_B4 "${CMAKE_MATCH_1}")
-    endif()
-endforeach()
-set(VERSIONED_BIN "${DEVICE_NAME}-${FW_B1}.${FW_B2}.${FW_B3}.${FW_B4}.bin")
-
 # Generate gitcommit.h with current git hash before compilation
 find_package(Git QUIET)
 if(GIT_FOUND)
@@ -102,7 +85,17 @@ endif()
 add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}.elf> ${HEX_FILE}
         COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}.elf> ${BIN_FILE}
-        COMMAND ${CMAKE_COMMAND} -E copy ${BIN_FILE} ${PROJECT_BINARY_DIR}/${VERSIONED_BIN}
-        COMMENT "Building ${HEX_FILE}
-Building ${BIN_FILE}
-Building ${VERSIONED_BIN}")
+        COMMAND ${CMAKE_COMMAND}
+            -DPARAMS_H=${CMAKE_SOURCE_DIR}/Core/Inc/params.h
+            -DBIN_DIR=${PROJECT_BINARY_DIR}
+            -DPROJECT_NAME=${PROJECT_NAME}
+            -P ${CMAKE_SOURCE_DIR}/cmake/versioned_bin.cmake
+        COMMENT "Building ${HEX_FILE}\nBuilding ${BIN_FILE}\nCreating versioned binary")
+
+# Touch a dependency file to force umeter.elf to always re-link,
+# ensuring POST_BUILD (hex, bin, versioned bin) always runs
+add_custom_target(force_relink
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/force_relink.c)
+add_dependencies(${PROJECT_NAME}.elf force_relink)
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/force_relink.c PROPERTIES GENERATED TRUE)
+target_sources(${PROJECT_NAME}.elf PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/force_relink.c)
