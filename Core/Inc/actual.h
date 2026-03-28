@@ -17,6 +17,11 @@ struct actual {
     int32_t pressure;
     uint32_t wind_speed;
     int32_t wind_direction;
+
+    /* Aggregated wind speed (written by task_anemometer, read by task_manager) */
+    uint32_t wind_speed_avg;
+    uint32_t wind_speed_min;
+    uint32_t wind_speed_max;
 };
 
 void actual_init(struct actual* self);

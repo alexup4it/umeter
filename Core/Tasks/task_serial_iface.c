@@ -1,8 +1,5 @@
 /*
  * Serial interface task
- *
- * Dmitry Proshutinsky <dproshutinsky@gmail.com>
- * 2024-2026
  */
 
 #include "ptasks.h"

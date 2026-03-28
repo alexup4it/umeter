@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "actual.h"
-#include "freqmeter.h"
 #include "logger.h"
 #include "params.h"
 #include "ptasks.h"
@@ -90,9 +89,9 @@ void task_manager_run(struct task_default_ctx* ctx) {
         /* --- Sequential pipeline: anemometer → sensors → net --- */
 
         if (do_anemometer) {
-            xEventGroupSetBits(task_events, TASK_EVENT_ANEMOMETER_START);
+            xEventGroupSetBits(task_events, TASK_EVENT_ANEM_START);
             xEventGroupWaitBits(task_events,
-                                TASK_EVENT_ANEMOMETER_DONE,
+                                TASK_EVENT_ANEM_DONE,
                                 pdTRUE,
                                 pdFALSE,
                                 pdMS_TO_TICKS(period_base * 1000U));
@@ -106,10 +105,7 @@ void task_manager_run(struct task_default_ctx* ctx) {
                                 pdFALSE,
                                 pdMS_TO_TICKS(period_sensors * 1000U));
 
-            /* Build a sensor record from actual values + wind accumulator */
-            struct freqmeter_accum ca;
-            freqmeter_accum_read(ctx->cnt, &ca);
-
+            /* Build a sensor record from actual values */
             xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
             struct sensor_record rec = {
                 .timestamp      = timestamp,
@@ -118,11 +114,14 @@ void task_manager_run(struct task_default_ctx* ctx) {
                 .humidity       = (uint16_t)(ctx->actual->humidity / 10),
                 .pressure       = (uint16_t)(ctx->actual->pressure / 1000),
                 .wind_direction = (uint16_t)(ctx->actual->wind_direction / 10),
-                .wind_speed_avg = (uint16_t)ca.avg,
-                .wind_speed_min = (uint16_t)ca.min,
-                .wind_speed_max = (uint16_t)ca.max,
+                .wind_speed_avg = (uint16_t)ctx->actual->wind_speed_avg,
+                .wind_speed_min = (uint16_t)ctx->actual->wind_speed_min,
+                .wind_speed_max = (uint16_t)ctx->actual->wind_speed_max,
             };
             xSemaphoreGive(ctx->actual->mutex);
+
+            /* Signal anemometer to reset its accumulator */
+            xEventGroupSetBits(task_events, TASK_EVENT_ANEM_AGGR_RESET);
 
             sensorq_push(ctx->sensorq, &rec);
         }

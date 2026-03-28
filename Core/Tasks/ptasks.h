@@ -16,18 +16,19 @@
 extern EventGroupHandle_t task_events;
 
 /* Scheduler → task trigger bits */
-#define TASK_EVENT_ANEMOMETER_START (1 << 0)
-#define TASK_EVENT_SENSORS_START    (1 << 1)
-#define TASK_EVENT_NET_START        (1 << 2)
-#define TASK_EVENT_WATCHDOG_START   (1 << 3)
+#define TASK_EVENT_ANEM_START     (1 << 0)
+#define TASK_EVENT_SENSORS_START  (1 << 1)
+#define TASK_EVENT_NET_START      (1 << 2)
+#define TASK_EVENT_WATCHDOG_START (1 << 3)
 
 /* Task → scheduler completion bits */
-#define TASK_EVENT_ANEMOMETER_DONE (1 << 4)
-#define TASK_EVENT_SENSORS_DONE    (1 << 5)
-#define TASK_EVENT_TIME_SYNCED     (1 << 6)
+#define TASK_EVENT_ANEM_DONE    (1 << 4)
+#define TASK_EVENT_SENSORS_DONE (1 << 5)
+#define TASK_EVENT_TIME_SYNCED  (1 << 6)
 
 /* Cross-task trigger bits */
-#define TASK_EVENT_OTA_START (1 << 7)
+#define TASK_EVENT_OTA_START       (1 << 7)
+#define TASK_EVENT_ANEM_AGGR_RESET (1 << 8)
 
 /**
  * Create event group. Call before scheduler starts.

@@ -1,12 +1,14 @@
 /*
  * Frequency meter
+ *
+ * Measures a single period between two consecutive pulses
+ * using the RTC sub-second counter.
  */
 
 #include "freqmeter.h"
 
 #include <string.h>
 
-#include "atomic.h"
 #include "rtc.h"
 
 /*
@@ -24,7 +26,7 @@
  * HAL_RTC_GetTime locks the shadow registers; HAL_RTC_GetDate
  * must be called afterwards to unlock them (RM0368 §22.3.6).
  */
-static uint32_t rtc_timestamp(void) {
+static uint32_t rtc_subseconds(void) {
     RTC_TimeTypeDef t;
     RTC_DateTypeDef d;
 
@@ -39,38 +41,27 @@ static uint32_t rtc_timestamp(void) {
 /******************************************************************************/
 void freqmeter_init(struct freqmeter* self) {
     memset(self, 0, sizeof(*self));
-    self->count = 0;
-
-    self->last_ts    = 0;
-    self->period_sum = 0;
-    self->period_cnt = 0;
-    self->started    = 0;
-
-    self->notify_task = NULL;
-
-    self->mutex     = xSemaphoreCreateMutex();
-    self->accum_min = FREQMETER_MIN_INIT;
-    self->accum_max = 0;
-    self->accum_sum = 0;
-    self->accum_cnt = 0;
 }
 
 /******************************************************************************/
 void freqmeter_irq(struct freqmeter* self) {
-    uint32_t now = rtc_timestamp();
+    uint32_t now = rtc_subseconds();
 
     if (self->started) {
         uint32_t period = now - self->last_ts;
-        self->period_sum += period;
-        self->period_cnt++;
+
+        /* Correct for minute-boundary wrap (Seconds: 59 → 0) */
+        if (now < self->last_ts) {
+            period += FREQMETER_RTC_WRAP;
+        }
+
+        self->period = period;
     }
 
     self->last_ts = now;
     self->started = 1;
 
-    atomic_inc(&self->count);
-
-    /* Wake the anemometer task if it is waiting */
+    /* Wake the waiting task */
     TaskHandle_t task = self->notify_task;
     if (task != NULL) {
         BaseType_t woken = pdFALSE;
@@ -80,74 +71,38 @@ void freqmeter_irq(struct freqmeter* self) {
 }
 
 /******************************************************************************/
-/******************************************************************************/
-void freqmeter_reset(struct freqmeter* self) {
-    self->count      = 0;
-    self->started    = 0;
-    self->last_ts    = 0;
-    self->period_sum = 0;
-    self->period_cnt = 0;
-}
+/*
+ * Block until a full period is captured or timeout expires.
+ *
+ * Resets state, waits for two pulses (start + end), returns the
+ * period in RTC SSR ticks.  Returns 0 on timeout (no wind).
+ *
+ * Must be called from a FreeRTOS task context.
+ */
+uint32_t freqmeter_read(struct freqmeter* self, uint32_t timeout_ms) {
+    TickType_t half = pdMS_TO_TICKS(timeout_ms / 2);
 
-/******************************************************************************/
-uint32_t freqmeter(struct freqmeter* self) {
-    return self->count;
-}
+    self->notify_task = xTaskGetCurrentTaskHandle();
 
-/******************************************************************************/
-uint32_t freqmeter_period_avg(struct freqmeter* self) {
-    if (self->period_cnt == 0) {
+    /* Clear any stale notifications */
+    ulTaskNotifyTake(pdTRUE, 0);
+
+    /* Reset state — next IRQ becomes the start pulse */
+    self->started     = 0;
+    self->period      = 0;
+
+    /* Wait for the first pulse (start timestamp) */
+    if (ulTaskNotifyTake(pdTRUE, half) == 0) {
+        self->notify_task = NULL;
         return 0;
     }
-    return self->period_sum / self->period_cnt;
-}
 
-/******************************************************************************/
-uint32_t freqmeter_speed(struct freqmeter* self) {
-    uint32_t avg_ticks = freqmeter_period_avg(self);
-    if (avg_ticks == 0) {
-        return 0;
+    /* Wait for the second pulse (completes the period) */
+    if (!self->period) {
+        ulTaskNotifyTake(pdTRUE, half);
     }
-    /*
-     * speed = FREQMETER_SPEED_SCALE * FREQMETER_RTC_FREQ / avg_ticks
-     *
-     * With FREQMETER_RTC_FREQ = 8192, FREQMETER_SPEED_SCALE = 10000:
-     *   1 s period (avg_ticks = 8192) → speed = 10000
-     *   Same result as the old formula with 10 ms ticks,
-     *   but 82× better resolution.
-     */
-    return (uint32_t)((uint64_t)FREQMETER_SPEED_SCALE * FREQMETER_RTC_FREQ /
-                      avg_ticks);
-}
 
-/******************************************************************************/
-void freqmeter_accum_update(struct freqmeter* self, uint32_t value) {
-    xSemaphoreTake(self->mutex, portMAX_DELAY);
+    self->notify_task = NULL;
 
-    if (value < self->accum_min) {
-        self->accum_min = value;
-    }
-    if (value > self->accum_max) {
-        self->accum_max = value;
-    }
-    self->accum_sum += value;
-    self->accum_cnt++;
-
-    xSemaphoreGive(self->mutex);
-}
-
-/******************************************************************************/
-void freqmeter_accum_read(struct freqmeter* self, struct freqmeter_accum* out) {
-    xSemaphoreTake(self->mutex, portMAX_DELAY);
-
-    out->max = self->accum_max;
-    out->min = (self->accum_min != FREQMETER_MIN_INIT) ? self->accum_min : 0;
-    out->avg = self->accum_cnt ? (self->accum_sum / self->accum_cnt) : 0;
-
-    self->accum_min = FREQMETER_MIN_INIT;
-    self->accum_max = 0;
-    self->accum_sum = 0;
-    self->accum_cnt = 0;
-
-    xSemaphoreGive(self->mutex);
+    return self->period;
 }
