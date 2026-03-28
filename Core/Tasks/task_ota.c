@@ -214,7 +214,7 @@ static uint32_t flash_checksum(uint32_t addr, uint32_t size) {
 static void ota_check_update(struct logger* logger) {
     struct sim800l_http_response response;
     char filename[64];
-    struct fws fws;
+    struct fws fws = {0};
     uint32_t addr;
     int retries;
     int ret;
@@ -320,10 +320,11 @@ static void ota_check_update(struct logger* logger) {
         return;
     }
 
-    /* Update SPI FLASH header */
-    LOG_I(logger, TAG, "update verified, rebooting");
     fws.loaded = 0;
     flash_write_header(&fws);
+
+    /* Update SPI FLASH header */
+    LOG_I(logger, TAG, "update verified, rebooting");
 
     /* Reset */
     vTaskDelay(pdMS_TO_TICKS(100));
