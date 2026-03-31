@@ -533,7 +533,9 @@ void task_net(void* argument) {
             last_time_update = xTaskGetTickCount();
             break;
         }
-        wait_for_net_event();
+        /* During startup task_manager is blocked on TIME_SYNCED and will
+           never send NET_START, so use a fixed delay instead. */
+        vTaskDelay(pdMS_TO_TICKS(params.period_upload * 1000U));
     }
 
     LOG_I(ctx.logger, TAG, "time synced");
