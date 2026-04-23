@@ -26,8 +26,11 @@
 
 #define JSON_MAX_TOKENS       16
 #define MAX_RECORDS_PER_BATCH 50
-#define SEND_RETRIES          3
+#define SEND_RETRIES          2
 #define REQUEST_BODY_SIZE     1024
+
+/* Max upload cycles to skip during backoff (caps at period_upload * 3) */
+#define BACKOFF_MAX_SKIPS 2
 
 #define TIME_UPDATE_PERIOD_MS (24 * 60 * 60 * 1000)
 
@@ -520,6 +523,8 @@ void task_net(void* argument) {
     };
 
     TickType_t last_time_update = 0;
+    uint32_t fail_streak        = 0;
+    uint32_t skip_cycles        = 0;
 
     /* ------------------------------------------------------------------ */
     /* Startup sequence                                                   */
@@ -569,6 +574,11 @@ void task_net(void* argument) {
         /* Wait for scheduler trigger */
         wait_for_net_event();
 
+        if (skip_cycles > 0) {
+            skip_cycles--;
+            continue;
+        }
+
         LOG_I(ctx.logger, TAG, "triggered");
 
         /* Update time if needed */
@@ -596,13 +606,17 @@ void task_net(void* argument) {
 
         /* Drop records from queue only after successful send */
         if (sent) {
+            fail_streak = 0;
             sensorq_drop(queue, record_count);
         } else {
             LOG_E(ctx.logger, TAG, "data send failed");
+            skip_cycles = fail_streak < BACKOFF_MAX_SKIPS ? fail_streak
+                                                          : BACKOFF_MAX_SKIPS;
+            fail_streak++;
         }
 
-        /* If more data in queue, loop immediately */
-        if (!sensorq_is_empty(queue)) {
+        /* If more data in queue, loop immediately (only after success) */
+        if (sent && !sensorq_is_empty(queue)) {
             continue;
         }
     }
