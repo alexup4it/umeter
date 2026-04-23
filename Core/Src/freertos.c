@@ -52,6 +52,7 @@
 /* USER CODE BEGIN Variables */
 
 extern volatile int init_done;
+extern volatile uint32_t uwTick; /* HAL tick counter (stm32f4xx_hal.c) */
 
 /* Context instances (defined in main.c) */
 extern struct task_default_ctx task_default_ctx;
@@ -290,6 +291,14 @@ void vPortSuppressTicksAndSleep(TickType_t xExpectedIdleTime) {
     if (elapsed_ticks >= xExpectedIdleTime) {
         elapsed_ticks = xExpectedIdleTime - 1U;
     }
+
+    /*
+     * Compensate HAL tick for time spent in Stop mode.
+     * TIM1 (HAL timebase) was suspended, so uwTick is stale.
+     * Pending IRQs (e.g. button EXTI) fire after __enable_irq()
+     * and call HAL_GetTick() — the value must already be correct.
+     */
+    uwTick += elapsed_ms;
 
     /* Re-enable interrupts (pending RTC_WKUP IRQ will fire now) */
     __enable_irq();
