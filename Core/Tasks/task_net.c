@@ -180,6 +180,8 @@ static int parse_config_response(const char* json) {
             params.period_sensors = strtoul(json + val->start, NULL, 0);
         } else if (jsoneq(json, &tokens[i], "period_anemometer") == 0) {
             params.period_anemometer = strtoul(json + val->start, NULL, 0);
+        } else if (jsoneq(json, &tokens[i], "offset_angle") == 0) {
+            params.offset_angle = strtoul(json + val->start, NULL, 0);
         }
     }
 
@@ -467,6 +469,7 @@ static void build_info_payload(char* request, size_t size) {
     strjson_uint(request, size, "period_upload", params.period_upload);
     strjson_uint(request, size, "period_sensors", params.period_sensors);
     strjson_uint(request, size, "period_anemometer", params.period_anemometer);
+    strjson_uint(request, size, "offset_angle", params.offset_angle);
 }
 
 static void build_cnet_payload(char* request,
