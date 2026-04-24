@@ -52,6 +52,8 @@ static void save_wind_direction_from_actual(struct actual* actual) {
     xSemaphoreTake(actual->mutex, portMAX_DELAY);
     actual->wind_direction = 0;
     xSemaphoreGive(actual->mutex);
+
+    led_blink(5);
 }
 
 void task_button_irq_notify_from_isr(void) {
