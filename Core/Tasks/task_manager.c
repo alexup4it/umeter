@@ -107,13 +107,25 @@ void task_manager_run(struct task_default_ctx* ctx) {
 
             /* Build a sensor record from actual values */
             xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
+            uint32_t avail           = ctx->actual->available;
             struct sensor_record rec = {
-                .timestamp      = timestamp,
-                .voltage        = (uint16_t)ctx->actual->voltage,
-                .temperature    = (int16_t)(ctx->actual->temperature / 10),
-                .humidity       = (uint16_t)(ctx->actual->humidity / 10),
-                .pressure       = (uint16_t)(ctx->actual->pressure / 1000),
-                .wind_direction = (uint16_t)(ctx->actual->wind_direction / 10),
+                .timestamp   = timestamp,
+                .voltage     = (avail & ACTUAL_VOLTAGE_AVAIL)
+                                   ? (uint16_t)ctx->actual->voltage
+                                   : UINT16_MAX,
+                .temperature = (avail & ACTUAL_TEMPERATURE_AVAIL)
+                                   ? (int16_t)(ctx->actual->temperature / 10)
+                                   : INT16_MAX,
+                .humidity    = (avail & ACTUAL_HUMIDITY_AVAIL)
+                                   ? (uint16_t)(ctx->actual->humidity / 10)
+                                   : UINT16_MAX,
+                .pressure    = (avail & ACTUAL_PRESSURE_AVAIL)
+                                   ? (uint16_t)(ctx->actual->pressure / 1000)
+                                   : UINT16_MAX,
+                .wind_direction =
+                    (avail & ACTUAL_WIND_DIR_AVAIL)
+                        ? (uint16_t)(ctx->actual->wind_direction / 10)
+                        : UINT16_MAX,
                 .wind_speed_avg = (uint16_t)ctx->actual->wind_speed_avg,
                 .wind_speed_min = (uint16_t)ctx->actual->wind_speed_min,
                 .wind_speed_max = (uint16_t)ctx->actual->wind_speed_max,

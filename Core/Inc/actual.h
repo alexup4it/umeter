@@ -8,8 +8,16 @@
 #include "cmsis_os.h"
 #include "semphr.h"
 
+#define ACTUAL_VOLTAGE_AVAIL     (1 << 0)
+#define ACTUAL_HUMIDITY_AVAIL    (1 << 1)
+#define ACTUAL_TEMPERATURE_AVAIL (1 << 2)
+#define ACTUAL_PRESSURE_AVAIL    (1 << 3)
+#define ACTUAL_WIND_DIR_AVAIL    (1 << 4)
+
 struct actual {
     SemaphoreHandle_t mutex;
+
+    uint32_t available;
 
     int voltage;
     int32_t humidity;

@@ -51,10 +51,14 @@ void task_sensors(void* argument) {
 
         led_blink(2);
 
+        uint32_t current_available = 0;
+
         /* Voltage */
         voltage = avoltage(ctx->voltage);
         if (voltage < 0) {
             LOG_E(ctx->logger, TAG, "voltage fail");
+        } else {
+            current_available |= ACTUAL_VOLTAGE_AVAIL;
         }
 
         /* AHT20: temperature + humidity */
@@ -63,6 +67,9 @@ void task_sensors(void* argument) {
         ctx->aht20_off();
         if (ret != 0) {
             LOG_E(ctx->logger, TAG, "aht20 fail");
+        } else {
+            current_available |=
+                ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL;
         }
 
         /* AS5600 + ICP-201xx share one I2C bus */
@@ -76,6 +83,8 @@ void task_sensors(void* argument) {
             ret = icp201xx_read(ctx->icp201xx, &pressure);
             if (ret != 0) {
                 LOG_E(ctx->logger, TAG, "icp read fail");
+            } else {
+                current_available |= ACTUAL_PRESSURE_AVAIL;
             }
         }
 
@@ -88,6 +97,7 @@ void task_sensors(void* argument) {
                 wind_direction =
                     ANGLE_MAX + wind_direction_raw - params.offset_angle;
             }
+            current_available |= ACTUAL_WIND_DIR_AVAIL;
         } else {
             LOG_E(ctx->logger, TAG, "as5600 fail");
         }
@@ -95,11 +105,25 @@ void task_sensors(void* argument) {
         ctx->sens_off();
 
         xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
-        ctx->actual->voltage        = voltage;
-        ctx->actual->temperature    = temperature;
-        ctx->actual->humidity       = humidity;
-        ctx->actual->pressure       = pressure;
-        ctx->actual->wind_direction = wind_direction;
+        ctx->actual->available &=
+            ~(ACTUAL_VOLTAGE_AVAIL | ACTUAL_TEMPERATURE_AVAIL |
+              ACTUAL_HUMIDITY_AVAIL | ACTUAL_PRESSURE_AVAIL |
+              ACTUAL_WIND_DIR_AVAIL);
+        ctx->actual->available |= current_available;
+
+        if (current_available & ACTUAL_VOLTAGE_AVAIL) {
+            ctx->actual->voltage = voltage;
+        }
+        if (current_available & ACTUAL_TEMPERATURE_AVAIL) {
+            ctx->actual->temperature = temperature;
+            ctx->actual->humidity    = humidity;
+        }
+        if (current_available & ACTUAL_PRESSURE_AVAIL) {
+            ctx->actual->pressure = pressure;
+        }
+        if (current_available & ACTUAL_WIND_DIR_AVAIL) {
+            ctx->actual->wind_direction = wind_direction;
+        }
         xSemaphoreGive(ctx->actual->mutex);
 
         xEventGroupSetBits(task_events, TASK_EVENT_SENSORS_DONE);
