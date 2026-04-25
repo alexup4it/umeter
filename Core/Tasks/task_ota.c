@@ -26,7 +26,7 @@ static struct w25q_s* s_mem;
 
 #define JSON_MAX_TOKENS 16
 
-#define FILE_PART_SIZE   2048
+#define FILE_PART_SIZE   1024
 #define FLASH_WRITE_SIZE 128
 #define FLASH_READ_SIZE  32
 
@@ -115,7 +115,6 @@ static void strtolower(char* data) {
 }
 
 static int ota_http_get(const char* url,
-                        char* hmac_buf,
                         struct sim800l_http_response* response) {
     struct modem_request request = {0};
 
@@ -233,7 +232,7 @@ static void ota_check_update(struct logger* logger) {
     }
 
     memset(&response, 0, sizeof(response));
-    ret = ota_http_get(url, hmac_buf, &response);
+    ret = ota_http_get(url, &response);
 
     /* No update available */
     if (ret == 204) {
@@ -282,7 +281,7 @@ static void ota_check_update(struct logger* logger) {
         utoa(FILE_PART_SIZE, &url[strlen(url)], 10);
 
         memset(&response, 0, sizeof(response));
-        ret = ota_http_get(url, hmac_buf, &response);
+        ret = ota_http_get(url, &response);
         if (ret != 200 || !ota_verify_response(&response, hmac_buf)) {
             LOG_W(logger, TAG, "chunk download failed");
             ota_response_free(&response);
