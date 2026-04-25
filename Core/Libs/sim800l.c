@@ -32,7 +32,7 @@ static void log_modem(struct sim800l* self,
 
     tmp[0] = dir;
     memcpy(tmp + 1, buf, len);
-    logger_add(self->logger, level, TAG, true, tmp, len + 1);
+    logger_add(self->logger, level, TAG, false, tmp, len + 1);
     vPortFree(tmp);
 }
 
