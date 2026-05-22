@@ -46,6 +46,9 @@ void task_sensors(void* argument) {
     int voltage                = -1;
     int cached_voltage         = -1;
     uint32_t voltage_skip      = 0;
+    int32_t cached_temperature = -1;
+    int32_t cached_humidity    = -1;
+    bool cached_aht20_valid    = false;
 
     LOG_I(ctx->logger, TAG, "init");
 
@@ -106,6 +109,9 @@ void task_sensors(void* argument) {
         } else if (!aht20_values_valid(temperature, humidity)) {
             LOG_E(ctx->logger, TAG, "aht20 invalid values");
         } else {
+            cached_temperature = temperature;
+            cached_humidity    = humidity;
+            cached_aht20_valid = true;
             current_available |=
                 ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL;
         }
@@ -144,9 +150,20 @@ void task_sensors(void* argument) {
 
         xSemaphoreTake(ctx->actual->mutex, portMAX_DELAY);
         ctx->actual->available &=
-            ~(ACTUAL_VOLTAGE_AVAIL | ACTUAL_TEMPERATURE_AVAIL |
-              ACTUAL_HUMIDITY_AVAIL | ACTUAL_PRESSURE_AVAIL |
+            ~(ACTUAL_VOLTAGE_AVAIL | ACTUAL_PRESSURE_AVAIL |
               ACTUAL_WIND_DIR_AVAIL);
+        if (current_available & ACTUAL_TEMPERATURE_AVAIL) {
+            ctx->actual->available &=
+                ~(ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL);
+        } else if (cached_aht20_valid) {
+            temperature = cached_temperature;
+            humidity    = cached_humidity;
+            current_available |=
+                ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL;
+        } else {
+            ctx->actual->available &=
+                ~(ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL);
+        }
         ctx->actual->available |= current_available;
 
         if (current_available & ACTUAL_VOLTAGE_AVAIL) {
