@@ -153,14 +153,16 @@ static void pm_sens_off(void) {
 }
 
 static void pm_aht20_on(void) {
-    MX_I2C2_Init();
+    HAL_I2C_DeInit(&hi2c2);
     HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_SET);
     osDelay(pdMS_TO_TICKS(100));
+    MX_I2C2_Init();
 }
 
 static void pm_aht20_off(void) {
     HAL_I2C_DeInit(&hi2c2);
     HAL_GPIO_WritePin(AHT20_EN_GPIO_Port, AHT20_EN_Pin, GPIO_PIN_RESET);
+    osDelay(pdMS_TO_TICKS(2));
 }
 
 static void pm_anemometer_on(void) {

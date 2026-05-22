@@ -24,6 +24,8 @@
 #define NETWORK_TIMEOUT_MS 30000
 
 #define IDLE_POWER_OFF_MS 500
+#define MODEM_FAIL_HARD_RESET_THRESHOLD 3
+#define MODEM_HARD_OFF_MS               5000
 
 struct modem_ctx {
     struct actual* actual;
@@ -34,6 +36,7 @@ struct modem_ctx {
     void (*power_off)(void);
     bool ready;
     bool gprs_open;
+    uint32_t fail_streak;
 };
 
 static QueueHandle_t s_request_queue;
@@ -63,6 +66,12 @@ static void modem_power_off(struct modem_ctx* ctx) {
 
     ctx->power_off();
     ctx->ready = false;
+}
+
+static void modem_hard_reset(struct modem_ctx* ctx, const char* reason) {
+    LOG_W(ctx->logger, TAG, reason);
+    modem_power_off(ctx);
+    osDelay(pdMS_TO_TICKS(MODEM_HARD_OFF_MS));
 }
 
 static int modem_ensure_ready(struct modem_ctx* ctx) {
@@ -171,6 +180,34 @@ static int process_netscan(struct modem_ctx* ctx,
     return sim800l_netscan(ctx->modem, request->netscan_result);
 }
 
+static int process_request(struct modem_ctx* ctx, struct modem_request* request) {
+    switch (request->type) {
+        case MODEM_REQ_HTTP_GET:
+            return process_http_get(ctx, request);
+        case MODEM_REQ_HTTP_POST:
+            return process_http_post(ctx, request);
+        case MODEM_REQ_HTTP_POST_BIN:
+            return process_http_post_bin(ctx, request);
+        case MODEM_REQ_NETSCAN:
+            return process_netscan(ctx, request);
+        default:
+            return -1;
+    }
+}
+
+static bool request_succeeded(enum modem_request_type type, int result) {
+    switch (type) {
+        case MODEM_REQ_HTTP_GET:
+        case MODEM_REQ_HTTP_POST:
+        case MODEM_REQ_HTTP_POST_BIN:
+            return result >= 200 && result < 300;
+        case MODEM_REQ_NETSCAN:
+            return result == 0;
+        default:
+            return false;
+    }
+}
+
 /******************************************************************************/
 /* Public API                                                                 */
 /******************************************************************************/
@@ -218,6 +255,7 @@ void task_modem(void* argument) {
         .power_off = task_ctx->power_off,
         .ready     = false,
         .gprs_open = false,
+        .fail_streak = 0,
     };
 
     for (;;) {
@@ -225,24 +263,24 @@ void task_modem(void* argument) {
             ctx.ready ? pdMS_TO_TICKS(IDLE_POWER_OFF_MS) : portMAX_DELAY;
 
         if (xQueueReceive(s_request_queue, &request, wait) == pdTRUE) {
-            int result;
+            int result = process_request(&ctx, &request);
 
-            switch (request.type) {
-                case MODEM_REQ_HTTP_GET:
-                    result = process_http_get(&ctx, &request);
-                    break;
-                case MODEM_REQ_HTTP_POST:
-                    result = process_http_post(&ctx, &request);
-                    break;
-                case MODEM_REQ_HTTP_POST_BIN:
-                    result = process_http_post_bin(&ctx, &request);
-                    break;
-                case MODEM_REQ_NETSCAN:
-                    result = process_netscan(&ctx, &request);
-                    break;
-                default:
-                    result = -1;
-                    break;
+            if (request_succeeded(request.type, result)) {
+                ctx.fail_streak = 0;
+            } else {
+                ctx.fail_streak++;
+                LOG_W(ctx.logger, TAG, "request failed");
+
+                if (ctx.fail_streak >= MODEM_FAIL_HARD_RESET_THRESHOLD) {
+                    modem_hard_reset(&ctx, "hard reset after repeated failures");
+                    result = process_request(&ctx, &request);
+
+                    if (request_succeeded(request.type, result)) {
+                        ctx.fail_streak = 0;
+                    } else {
+                        ctx.fail_streak = 1;
+                    }
+                }
             }
 
             /* Store result and notify caller */

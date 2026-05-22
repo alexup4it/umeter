@@ -19,6 +19,20 @@
 
 //#define AVOLTAGE_CALIB
 #define ANGLE_MAX 360000
+#define VOLTAGE_MEASURE_EVERY 5
+#define AHT20_READ_RETRIES    3
+#define AHT20_RETRY_DELAY_MS  50
+#define AHT20_TEMP_MIN_MDEGC  (-40000)
+#define AHT20_TEMP_MAX_MDEGC  85000
+#define AHT20_HUM_MIN_MPERMIL 0
+#define AHT20_HUM_MAX_MPERMIL 100000
+
+static bool aht20_values_valid(int32_t temperature, int32_t humidity) {
+    return temperature >= AHT20_TEMP_MIN_MDEGC &&
+           temperature <= AHT20_TEMP_MAX_MDEGC &&
+           humidity >= AHT20_HUM_MIN_MPERMIL &&
+           humidity <= AHT20_HUM_MAX_MPERMIL;
+}
 
 void task_sensors(void* argument) {
     struct task_sensors_ctx* ctx = argument;
@@ -30,6 +44,8 @@ void task_sensors(void* argument) {
     int32_t wind_direction     = -1;
     int32_t wind_direction_raw = -1;
     int voltage                = -1;
+    int cached_voltage         = -1;
+    uint32_t voltage_skip      = 0;
 
     LOG_I(ctx->logger, TAG, "init");
 
@@ -54,19 +70,41 @@ void task_sensors(void* argument) {
         uint32_t current_available = 0;
 
         /* Voltage */
-        voltage = avoltage(ctx->voltage);
-        if (voltage < 0) {
-            LOG_E(ctx->logger, TAG, "voltage fail");
+        if (cached_voltage < 0 || voltage_skip == 0) {
+            voltage = avoltage(ctx->voltage);
+            if (voltage < 0) {
+                LOG_E(ctx->logger, TAG, "voltage fail");
+                voltage_skip = 0;
+            } else {
+                cached_voltage = voltage;
+                voltage_skip   = VOLTAGE_MEASURE_EVERY - 1;
+            }
         } else {
+            voltage = cached_voltage;
+            voltage_skip--;
+        }
+
+        if (voltage >= 0) {
             current_available |= ACTUAL_VOLTAGE_AVAIL;
         }
 
         /* AHT20: temperature + humidity */
-        ctx->aht20_on();
-        ret = aht20_read(ctx->aht20, &temperature, &humidity);
-        ctx->aht20_off();
+        ret = -1;
+        for (int attempt = 0; attempt < AHT20_READ_RETRIES; attempt++) {
+            ctx->aht20_on();
+            ret = aht20_read(ctx->aht20, &temperature, &humidity);
+            ctx->aht20_off();
+
+            if (ret == 0) {
+                break;
+            }
+
+            osDelay(pdMS_TO_TICKS(AHT20_RETRY_DELAY_MS));
+        }
         if (ret != 0) {
             LOG_E(ctx->logger, TAG, "aht20 fail");
+        } else if (!aht20_values_valid(temperature, humidity)) {
+            LOG_E(ctx->logger, TAG, "aht20 invalid values");
         } else {
             current_available |=
                 ACTUAL_TEMPERATURE_AVAIL | ACTUAL_HUMIDITY_AVAIL;

@@ -370,6 +370,10 @@ static int parse_http_action(struct sim800l* self,
     return status;
 }
 
+static bool http_status_is_success(int status) {
+    return status >= 200 && status < 300;
+}
+
 /* Parse Authorization header from HTTPHEAD response.
  * Returns allocated string or NULL. */
 static char* parse_http_head_authorization(struct sim800l* self,
@@ -592,6 +596,7 @@ static int http_execute(struct sim800l* self,
                         struct sim800l_http_response* response) {
     int is_post = (body != NULL);
     int result  = -1;
+    int data_length = 0;
 
     memset(response, 0, sizeof(*response));
 
@@ -607,10 +612,11 @@ static int http_execute(struct sim800l* self,
 
         /* Execute request */
         transmit(self, is_post ? "AT+HTTPACTION=1" : "AT+HTTPACTION=0");
-        int http_status = parse_http_action(self, NULL, 30000);
-        if (http_status != 200) {
+        int http_status = parse_http_action(self, &data_length, 30000);
+        if (!http_status_is_success(http_status)) {
             break;
         }
+        result = http_status;
 
         /* Read authorization header if requested */
         if (read_auth) {
@@ -619,19 +625,22 @@ static int http_execute(struct sim800l* self,
         }
 
         /* Read response body */
-        transmit(self, "AT+HTTPREAD");
-        response->body = parse_http_read(self, &response->body_length, 10000);
-        if (!response->body) {
-            break;
+        if (data_length > 0) {
+            transmit(self, "AT+HTTPREAD");
+            response->body =
+                parse_http_read(self, &response->body_length, 10000);
+            if (!response->body) {
+                result = -1;
+                break;
+            }
         }
-        result = 200;
     } while (0);
 
     /* Drain any leftover modem data before terminating the HTTP session.
      * If HTTPREAD failed mid-transfer, the modem may still be dumping binary
      * data.  Sending HTTPTERM while that data is in flight corrupts the
      * modem state, so we wait for the stream to go idle first. */
-    if (result != 200) {
+    if (!http_status_is_success(result)) {
         drain_and_reset(self);
     }
 
@@ -668,6 +677,7 @@ int sim800l_http_post_bin(struct sim800l* self,
                           size_t body_len,
                           struct sim800l_http_response* response) {
     int result = -1;
+    int data_length = 0;
 
     memset(response, 0, sizeof(*response));
 
@@ -683,22 +693,26 @@ int sim800l_http_post_bin(struct sim800l* self,
 
         /* Execute POST */
         transmit(self, "AT+HTTPACTION=1");
-        int http_status = parse_http_action(self, NULL, 30000);
-        if (http_status != 200) {
+        int http_status = parse_http_action(self, &data_length, 30000);
+        if (!http_status_is_success(http_status)) {
             break;
         }
+        result = http_status;
 
         /* Read response body */
-        transmit(self, "AT+HTTPREAD");
-        response->body = parse_http_read(self, &response->body_length, 10000);
-        if (!response->body) {
-            break;
+        if (data_length > 0) {
+            transmit(self, "AT+HTTPREAD");
+            response->body =
+                parse_http_read(self, &response->body_length, 10000);
+            if (!response->body) {
+                result = -1;
+                break;
+            }
         }
-        result = 200;
     } while (0);
 
     /* Drain any leftover modem data before terminating the HTTP session. */
-    if (result != 200) {
+    if (!http_status_is_success(result)) {
         drain_and_reset(self);
     }
 

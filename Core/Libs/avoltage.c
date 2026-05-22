@@ -14,6 +14,8 @@
 
 /* Settling time for voltage divider after enabling MOSFET (ms) */
 #define MEAS_SETTLE_MS 10
+#define ADC_DISCARD_SAMPLES 1
+#define ADC_AVG_SAMPLES     4
 
 /******************************************************************************/
 void avoltage_init(struct avoltage* self,
@@ -51,6 +53,7 @@ int avoltage_calib(struct avoltage* self) {
 int avoltage(struct avoltage* self) {
     HAL_StatusTypeDef status;
     uint32_t value;
+    uint32_t sum = 0;
 
     xSemaphoreTake(self->mutex, portMAX_DELAY);
 
@@ -59,24 +62,34 @@ int avoltage(struct avoltage* self) {
     /* Enable voltage divider */
     osDelay(pdMS_TO_TICKS(MEAS_SETTLE_MS));
 
-    status = HAL_ADC_Start(self->adc);
-    if (status != HAL_OK) {
-        self->power_off();
-        xSemaphoreGive(self->mutex);
-        return -1;
-    }
+    for (uint32_t i = 0; i < (ADC_DISCARD_SAMPLES + ADC_AVG_SAMPLES); i++) {
+        status = HAL_ADC_Start(self->adc);
+        if (status != HAL_OK) {
+            self->power_off();
+            xSemaphoreGive(self->mutex);
+            return -1;
+        }
 
-    status = HAL_ADC_PollForConversion(self->adc, ADC_TIMEOUT);
-    if (status != HAL_OK) {
-        self->power_off();
-        xSemaphoreGive(self->mutex);
-        return -1;
-    }
+        status = HAL_ADC_PollForConversion(self->adc, ADC_TIMEOUT);
+        if (status != HAL_OK) {
+            HAL_ADC_Stop(self->adc);
+            self->power_off();
+            xSemaphoreGive(self->mutex);
+            return -1;
+        }
 
-    value = HAL_ADC_GetValue(self->adc);
+        value = HAL_ADC_GetValue(self->adc);
+        HAL_ADC_Stop(self->adc);
+
+        if (i >= ADC_DISCARD_SAMPLES) {
+            sum += value;
+        }
+    }
 
     self->power_off();
     xSemaphoreGive(self->mutex);
+
+    value = sum / ADC_AVG_SAMPLES;
 
     return value * self->ratio * ADC_REF / ADC_MAX;
 }
